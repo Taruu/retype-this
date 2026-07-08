@@ -173,10 +173,13 @@ export function buildOverlaySegments(expected, typed) {
 
   const hasMismatch = typ.length > matched
   if (hasMismatch && matched < exp.length) {
-    // Hide the expected char at mismatch — typo is shown only on the typed layer.
-    sliceFromNorm(matched, matched + 1, 'hidden')
-    if (matched + 1 < exp.length) {
-      const pendingStart = indexMap[matched] + 1
+    // Hide as many expected chars as typed typo chars so typos replace, not stack on, pending text.
+    const typoLen = typ.length - matched
+    const hiddenCount = Math.min(typoLen, exp.length - matched)
+    sliceFromNorm(matched, matched + hiddenCount, 'hidden')
+    const pendingNormStart = matched + hiddenCount
+    if (pendingNormStart < exp.length) {
+      const pendingStart = pendingNormStart === 0 ? 0 : indexMap[pendingNormStart - 1] + 1
       if (pendingStart < expected.length) {
         segments.push({ text: expected.slice(pendingStart), state: 'pending' })
       }
@@ -228,9 +231,7 @@ export function buildTypedSegments(expected, typed) {
     segments.push({ text: getExpectedSliceFromNorm(expected, 0, matched), state: 'correct' })
   }
   if (rawMatchEnd < typed.length) {
-    for (const ch of typed.slice(rawMatchEnd)) {
-      segments.push({ text: ch, state: 'typo' })
-    }
+    segments.push({ text: typed.slice(rawMatchEnd), state: 'typo' })
   }
 
   return segments.length ? segments : [{ text: typed, state: 'typo' }]
