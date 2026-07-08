@@ -20,6 +20,8 @@ export const useReaderStore = defineStore('reader', {
     error: '',
     draftText: '',
     saving: false,
+    saveStatus: 'saved',
+    lastSavedAt: null,
   }),
   getters: {
     pageSize: (state) => state.book?.page_size || state.pageData?.page_size || 4,
@@ -44,6 +46,13 @@ export const useReaderStore = defineStore('reader', {
       this.pageCache = {}
       this.draftText = ''
       this.error = ''
+      this.saveStatus = 'saved'
+      this.lastSavedAt = null
+    },
+    markDraftDirty() {
+      if (this.saveStatus !== 'saving') {
+        this.saveStatus = 'unsaved'
+      }
     },
     async loadBook(bookId, page = null) {
       this.loading = true
@@ -64,9 +73,13 @@ export const useReaderStore = defineStore('reader', {
           draft_text: progress.draft_text || '',
         }
         this.draftText = this.progress.draft_text
+        this.saveStatus = 'saved'
+        this.lastSavedAt = Date.now()
+        const pageSize = book.page_size || 4
+        const typingPage = Math.floor(progress.typing_block_index / pageSize)
         const targetPage = page !== null && page !== undefined
           ? Number(page)
-          : progress.reading_page
+          : typingPage
         await this.loadPage(targetPage)
       } catch (error) {
         this.error = error.message || 'Failed to load book'
@@ -120,12 +133,18 @@ export const useReaderStore = defineStore('reader', {
       if (!this.bookId || this.saving) return
       this.draftText = draftText
       this.saving = true
+      this.saveStatus = 'saving'
       try {
         await this.persistProgress({
           reading_page: this.currentPage,
           char_offset: draftText.length,
           draft_text: draftText,
         })
+        this.saveStatus = 'saved'
+        this.lastSavedAt = Date.now()
+      } catch (error) {
+        this.saveStatus = 'error'
+        throw error
       } finally {
         this.saving = false
       }
@@ -140,6 +159,8 @@ export const useReaderStore = defineStore('reader', {
         draft_text: saved.draft_text || '',
       }
       this.draftText = ''
+      this.saveStatus = 'saved'
+      this.lastSavedAt = Date.now()
       delete this.pageCache[this.currentPage]
       await this.loadPage(this.currentPage)
     },

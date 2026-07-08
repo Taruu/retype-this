@@ -130,6 +130,15 @@ export function compareTypedText(expected, typed) {
   }
 }
 
+/** Map normalized character range back to original expected substring. */
+function getExpectedSliceFromNorm(expected, normStart, normEnd) {
+  const { indexMap } = normalizeExpectedWithMap(expected)
+  if (normStart >= normEnd || normStart >= indexMap.length) return ''
+  const origStart = normStart === 0 ? 0 : indexMap[normStart - 1] + 1
+  const origEnd = indexMap[Math.min(normEnd, indexMap.length) - 1] + 1
+  return origEnd > origStart ? expected.slice(origStart, origEnd) : ''
+}
+
 /**
  * Split expected text into matched / error / pending segments for overlay display.
  */
@@ -152,11 +161,9 @@ export function buildOverlaySegments(expected, typed) {
   const segments = []
 
   const sliceFromNorm = (normStart, normEnd, state) => {
-    if (normStart >= normEnd || normStart >= indexMap.length) return
-    const origStart = normStart === 0 ? 0 : indexMap[normStart - 1] + 1
-    const origEnd = indexMap[Math.min(normEnd, indexMap.length) - 1] + 1
-    if (origEnd > origStart) {
-      segments.push({ text: expected.slice(origStart, origEnd), state })
+    const slice = getExpectedSliceFromNorm(expected, normStart, normEnd)
+    if (slice) {
+      segments.push({ text: slice, state })
     }
   }
 
@@ -195,7 +202,8 @@ function findRawIndexForNormLength(raw, normLen) {
 }
 
 /**
- * Segments of what the user actually typed — wrong chars shown as typos.
+ * Segments of what the user typed — matched chars shown as expected glyphs
+ * (so e.g. " aligns with «), wrong chars shown as typos.
  */
 export function buildTypedSegments(expected, typed) {
   if (!typed) return []
@@ -205,19 +213,19 @@ export function buildTypedSegments(expected, typed) {
   const matched = comparison.matchedChars
 
   if (comparison.complete) {
-    return [{ text: typed, state: 'correct' }]
+    return [{ text: expected, state: 'correct' }]
   }
 
   if (matched >= typ.length) {
-    const rawEnd = findRawIndexForNormLength(typed, matched)
-    return [{ text: typed.slice(0, rawEnd), state: 'correct' }]
+    const displayText = getExpectedSliceFromNorm(expected, 0, matched)
+    return [{ text: displayText, state: 'correct' }]
   }
 
   const rawMatchEnd = findRawIndexForNormLength(typed, matched)
   const segments = []
 
-  if (rawMatchEnd > 0) {
-    segments.push({ text: typed.slice(0, rawMatchEnd), state: 'correct' })
+  if (matched > 0) {
+    segments.push({ text: getExpectedSliceFromNorm(expected, 0, matched), state: 'correct' })
   }
   if (rawMatchEnd < typed.length) {
     for (const ch of typed.slice(rawMatchEnd)) {

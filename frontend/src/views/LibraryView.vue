@@ -53,8 +53,10 @@ async function removeBook(id) {
 }
 
 function openBook(book) {
-  const page = book.progress?.reading_page ?? 0
-  router.push(`/book/${book.id}/page/${page}`)
+  const pageSize = book.page_size ?? 4
+  const typingIndex = book.progress?.typing_block_index ?? 0
+  const typingPage = Math.floor(typingIndex / pageSize)
+  router.push(`/book/${book.id}/page/${typingPage}`)
 }
 
 function logout() {

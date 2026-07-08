@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   buildOverlaySegments,
   buildTypedSegments,
+  clearDraft,
   compareTypedText,
   loadDraft,
   normalizeText,
@@ -21,6 +22,8 @@ const props = defineProps({
 
 const emit = defineEmits(['update:draft', 'complete', 'save'])
 
+const submitBlockCompletion = inject('submitBlockCompletion', null)
+
 const text = ref('')
 const completing = ref(false)
 const guideRef = ref(null)
@@ -28,10 +31,19 @@ const inputRef = ref(null)
 let idleTimer = null
 let mouseTimer = null
 
+function emitDraft() {
+  emit('update:draft', { blockIndex: props.blockIndex, text: text.value })
+}
+
+function emitSave() {
+  if (completing.value) return
+  emit('save', { blockIndex: props.blockIndex, text: text.value })
+}
+
 function restoreDraft() {
   const local = loadDraft(props.bookId, props.blockIndex)
   text.value = props.initialDraft || local || ''
-  emit('update:draft', text.value)
+  emitDraft()
 }
 
 watch(
@@ -39,12 +51,13 @@ watch(
   () => {
     completing.value = false
     restoreDraft()
+    focusInput()
   },
   { immediate: true },
 )
 
 const comparison = computed(() => compareTypedText(props.expectedText, text.value))
-const isComplete = computed(() => comparison.value.complete)
+const isComplete = computed(() => comparison.value.complete || completing.value)
 const guideSegments = computed(() => buildOverlaySegments(props.expectedText, text.value))
 const typedSegments = computed(() => buildTypedSegments(props.expectedText, text.value))
 const progressPercent = computed(() => Math.round(comparison.value.progress * 100))
@@ -70,16 +83,23 @@ function syncInputHeight() {
   }
 }
 
+function focusInput() {
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
 onMounted(() => {
   syncInputHeight()
   window.addEventListener('mousemove', onMouseMove)
+  focusInput()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('mousemove', onMouseMove)
   clearTimeout(idleTimer)
   clearTimeout(mouseTimer)
-  emit('save', text.value)
+  emitSave()
 })
 
 watch(guideSegments, () => {
@@ -89,40 +109,57 @@ watch(guideSegments, () => {
 function scheduleIdleSave() {
   clearTimeout(idleTimer)
   idleTimer = setTimeout(() => {
-    emit('save', text.value)
+    emitSave()
   }, IDLE_SAVE_MS)
 }
 
 function onMouseMove() {
   clearTimeout(mouseTimer)
   mouseTimer = setTimeout(() => {
-    emit('save', text.value)
+    emitSave()
   }, MOUSE_SAVE_MS)
 }
 
 function onInput() {
   saveDraft(props.bookId, props.blockIndex, text.value)
-  emit('update:draft', text.value)
+  emitDraft()
   scheduleIdleSave()
   requestAnimationFrame(syncInputHeight)
 }
 
 async function autoComplete() {
-  if (!isComplete.value || completing.value) return
+  if (!comparison.value.complete || completing.value) return
   completing.value = true
+  clearTimeout(idleTimer)
+  clearTimeout(mouseTimer)
+  const normalized = normalizeText(text.value)
   try {
-    emit('complete', normalizeText(text.value))
-    text.value = ''
-  } finally {
+    if (submitBlockCompletion) {
+      const ok = await submitBlockCompletion(normalized)
+      if (ok) {
+        text.value = ''
+        clearDraft(props.bookId, props.blockIndex)
+      } else {
+        completing.value = false
+      }
+    } else {
+      emit('complete', normalized)
+      text.value = ''
+      clearDraft(props.bookId, props.blockIndex)
+    }
+  } catch {
     completing.value = false
   }
 }
 
-watch(isComplete, (complete) => {
-  if (complete && text.value) {
-    autoComplete()
-  }
-})
+watch(
+  () => comparison.value.complete,
+  (complete) => {
+    if (complete && text.value) {
+      autoComplete()
+    }
+  },
+)
 </script>
 
 <template>
