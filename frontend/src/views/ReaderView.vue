@@ -143,6 +143,13 @@ async function goToNextPage() {
 }
 
 function onKeydown(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    flushProgress()
+    backToLibrary()
+    return
+  }
+
   if (reader.loading || !reader.pageData) return
 
   if (event.key === 'PageUp') {
@@ -260,7 +267,7 @@ function backToLibrary() {
             <span class="reader-save__label">{{ saveStatusLabel }}</span>
           </span>
         </p>
-        <p class="muted reader-hints">Enter — next page when finished</p>
+        <p class="muted reader-hints">Enter — next page when finished · Esc — library</p>
       </div>
       <div class="reader-nav">
         <div class="reader-nav__group">
