@@ -10,6 +10,7 @@ import {
 
 const IDLE_SAVE_MS = 15000
 const DRAFT_SAVE_MS = 400
+const HINT_CURSOR_RADIUS = 1
 
 const props = defineProps({
   bookId: { type: Number, required: true },
@@ -23,6 +24,7 @@ const emit = defineEmits(['update:draft', 'complete', 'save'])
 const submitBlockCompletion = inject('submitBlockCompletion', null)
 
 const text = ref('')
+const cursorPos = ref(0)
 const completing = ref(false)
 const guideRef = ref(null)
 const hintsRef = ref(null)
@@ -71,6 +73,16 @@ const typedSegments = computed(() => typingState.value.typedSegments)
 const progressPercent = computed(() => Math.round(typingState.value.progress * 100))
 const hasTypos = computed(() => typingState.value.hasTypos)
 
+const hasVisibleHint = computed(() => {
+  const cursor = cursorPos.value
+  return guideSegments.value.some((segment) => {
+    if (segment.state !== 'hint' || segment.typoRawStart === undefined) return false
+    const start = segment.typoRawStart
+    const end = segment.typoRawEnd ?? start + 1
+    return cursor >= start - HINT_CURSOR_RADIUS && cursor <= end + HINT_CURSOR_RADIUS
+  })
+})
+
 const statusMessage = computed(() => {
   if (!text.value.trim()) {
     return 'Type over the text exactly — one character at a time.'
@@ -79,7 +91,7 @@ const statusMessage = computed(() => {
     return '✓ Match — moving to next block…'
   }
   if (hasTypos.value) {
-    return 'Fix red characters to match each symbol exactly.'
+    return 'Move the cursor near a red mistake to see the orange correction.'
   }
   const { matchedChars, totalChars } = typingState.value
   return `${matchedChars} / ${totalChars} characters matched.`
@@ -95,19 +107,38 @@ function syncInputHeight() {
   }
 }
 
+function isHintNearCursor(segment) {
+  if (segment.state !== 'hint' || segment.typoRawStart === undefined) return false
+  const start = segment.typoRawStart
+  const end = segment.typoRawEnd ?? start + 1
+  const cursor = cursorPos.value
+  return cursor >= start - HINT_CURSOR_RADIUS && cursor <= end + HINT_CURSOR_RADIUS
+}
+
 function guideSegmentClass(segment) {
   if (segment.state === 'hint') return 'typing-overlay__hidden'
   return `typing-overlay__${segment.state}`
 }
 
 function hintSegmentClass(segment) {
-  if (segment.state === 'hint') return 'typing-overlay__hint typing-overlay__hint--float'
+  if (isHintNearCursor(segment)) {
+    return 'typing-overlay__hint typing-overlay__hint--float'
+  }
   return 'typing-overlay__hints-spacer'
+}
+
+function syncCursorFromInput(event) {
+  const target = event?.target ?? inputRef.value
+  if (!target) return
+  cursorPos.value = target.selectionStart ?? text.value.length
 }
 
 function focusInput() {
   nextTick(() => {
-    inputRef.value?.focus()
+    const el = inputRef.value
+    if (!el) return
+    el.focus()
+    cursorPos.value = el.selectionStart ?? text.value.length
   })
 }
 
@@ -154,6 +185,7 @@ function scheduleDraftSave() {
 
 function onInput(event) {
   text.value = event.target.value
+  syncCursorFromInput(event)
   emitDraft()
   needsServerSave = true
   scheduleDraftSave()
@@ -212,7 +244,7 @@ watch(
       {{ statusMessage }}
     </p>
 
-    <div class="typing-overlay__wrap">
+    <div class="typing-overlay__wrap" :class="{ 'typing-overlay__wrap--hint': hasVisibleHint }">
       <div ref="guideRef" class="typing-overlay__guide" aria-hidden="true">
         <span
           v-for="(segment, index) in guideSegments"
@@ -242,6 +274,9 @@ watch(
         autocapitalize="off"
         autocomplete="off"
         @input="onInput"
+        @click="syncCursorFromInput"
+        @keyup="syncCursorFromInput"
+        @select="syncCursorFromInput"
       />
     </div>
   </section>
@@ -307,6 +342,11 @@ watch(
   font-variant-ligatures: none;
   font-feature-settings: normal;
   tab-size: 4;
+  overflow: visible;
+}
+
+.typing-overlay__wrap--hint {
+  margin-top: calc(var(--typing-line) * 1em);
 }
 
 .typing-overlay__guide,
@@ -350,7 +390,7 @@ watch(
 .typing-overlay__hints {
   position: absolute;
   inset: 0;
-  z-index: 1.5;
+  z-index: 3;
   pointer-events: none;
   padding: var(--typing-pad-y) var(--typing-pad-x);
   font-family: var(--font-typing);
@@ -380,6 +420,7 @@ watch(
   display: inline-block;
   transform: translateY(calc(-1 * var(--typing-line) * 1em));
   vertical-align: bottom;
+  z-index: 3;
 }
 
 .typing-overlay__typed {

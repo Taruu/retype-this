@@ -252,7 +252,7 @@ function mergeAdjacentSegments(segments) {
   for (let i = 1; i < segments.length; i += 1) {
     const prev = merged[merged.length - 1]
     const curr = segments[i]
-    if (prev.state === curr.state) {
+    if (prev.state === curr.state && curr.state !== 'hint') {
       prev.text += curr.text
     } else {
       merged.push({ ...curr })
@@ -261,7 +261,16 @@ function mergeAdjacentSegments(segments) {
   return merged
 }
 
-function buildGuideSegments(expected, indexMap, ops, complete, typed, hasTypos) {
+function buildGuideSegments(
+  expected,
+  indexMap,
+  ops,
+  complete,
+  typed,
+  hasTypos,
+  normToRawStart,
+  normToRawEnd,
+) {
   const { normalized: exp } = getExpectedNormalized(expected)
 
   if (!exp.length) {
@@ -290,7 +299,15 @@ function buildGuideSegments(expected, indexMap, ops, complete, typed, hasTypos) 
     } else if (op.op === 'delete') {
       pushSlice(op.expStart, op.expEnd, op.skipped && hasTypos ? 'hint' : 'pending')
     } else if (op.op === 'replace') {
-      pushSlice(op.expStart, op.expEnd, 'hint')
+      if (op.expEnd <= op.expStart) continue
+      const slice = getExpectedSliceFromNorm(expected, indexMap, op.expStart, op.expEnd)
+      if (!slice) continue
+      segments.push({
+        text: slice,
+        state: 'hint',
+        typoRawStart: normToRawStart[op.typStart] ?? 0,
+        typoRawEnd: normToRawEnd[op.typEnd - 1] ?? typed.length,
+      })
     }
   }
 
@@ -407,6 +424,8 @@ export function analyzeTypingState(expected, typed) {
     core.complete,
     typed,
     core.hasTypos,
+    core.normToRawStart,
+    core.normToRawEnd,
   )
   const typedSegments = buildTypedSegmentsFromOps(
     typed,
