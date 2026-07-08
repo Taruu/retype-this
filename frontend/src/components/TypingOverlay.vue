@@ -90,8 +90,8 @@ function syncInputHeight() {
   const guideH = guideRef.value?.offsetHeight ?? 0
   const typedH = typedRef.value?.offsetHeight ?? 0
   const height = Math.max(guideH, typedH)
-  if (inputRef.value && height) {
-    inputRef.value.style.height = `${height}px`
+  if (guideRef.value && height) {
+    guideRef.value.style.minHeight = `${height}px`
   }
 }
 
@@ -234,39 +234,41 @@ watch(
 
     <div class="typing-overlay__wrap">
       <div class="typing-overlay__hint-row" aria-hidden="true" />
-      <div ref="guideRef" class="typing-overlay__guide" aria-hidden="true">
-        <span
-          v-for="(segment, index) in guideSegments"
-          :key="`g-${index}`"
-          :class="guideSegmentClass(segment)"
-        >{{ segment.text }}</span>
+      <div class="typing-overlay__field">
+        <div ref="guideRef" class="typing-overlay__guide" aria-hidden="true">
+          <span
+            v-for="(segment, index) in guideSegments"
+            :key="`g-${index}`"
+            :class="guideSegmentClass(segment)"
+          >{{ segment.text }}</span>
+        </div>
+        <div class="typing-overlay__hints" aria-hidden="true">
+          <span
+            v-for="(segment, index) in guideSegments"
+            :key="`h-${index}`"
+            :class="hintSegmentClass(segment)"
+          >{{ segment.text }}</span>
+        </div>
+        <div ref="typedRef" class="typing-overlay__typed" aria-hidden="true">
+          <span
+            v-for="(segment, index) in typedSegments"
+            :key="`t-${index}`"
+            :class="segment.state === 'typo' ? 'typing-overlay__typo' : 'typing-overlay__correct'"
+          >{{ segment.text }}</span>
+        </div>
+        <textarea
+          ref="inputRef"
+          :value="text"
+          class="typing-overlay__input"
+          spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
+          @input="onInput"
+          @click="syncCursorFromInput"
+          @keyup="syncCursorFromInput"
+          @select="syncCursorFromInput"
+        />
       </div>
-      <div class="typing-overlay__hints" aria-hidden="true">
-        <span
-          v-for="(segment, index) in guideSegments"
-          :key="`h-${index}`"
-          :class="hintSegmentClass(segment)"
-        >{{ segment.text }}</span>
-      </div>
-      <div ref="typedRef" class="typing-overlay__typed" aria-hidden="true">
-        <span
-          v-for="(segment, index) in typedSegments"
-          :key="`t-${index}`"
-          :class="segment.state === 'typo' ? 'typing-overlay__typo' : 'typing-overlay__correct'"
-        >{{ segment.text }}</span>
-      </div>
-      <textarea
-        ref="inputRef"
-        :value="text"
-        class="typing-overlay__input"
-        spellcheck="false"
-        autocapitalize="off"
-        autocomplete="off"
-        @input="onInput"
-        @click="syncCursorFromInput"
-        @keyup="syncCursorFromInput"
-        @select="syncCursorFromInput"
-      />
     </div>
   </section>
 </template>
@@ -340,6 +342,17 @@ watch(
   pointer-events: none;
 }
 
+.typing-overlay__field {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: border-color 0.15s ease;
+}
+
+.typing-overlay__field:focus-within {
+  border-color: var(--accent);
+}
+
 .typing-overlay__guide,
 .typing-overlay__typed,
 .typing-overlay__input {
@@ -380,10 +393,7 @@ watch(
 
 .typing-overlay__hints {
   position: absolute;
-  top: var(--hint-row);
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   z-index: 3;
   pointer-events: none;
   padding: var(--typing-pad-y) var(--typing-pad-x);
@@ -419,10 +429,7 @@ watch(
 
 .typing-overlay__typed {
   position: absolute;
-  top: var(--hint-row);
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   z-index: 1;
   color: var(--text);
 }
@@ -438,15 +445,12 @@ watch(
 
 .typing-overlay__input {
   position: absolute;
-  top: var(--hint-row);
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   z-index: 2;
   width: 100%;
-  min-height: 100%;
+  height: 100%;
   margin: 0;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 8px;
   resize: none;
   overflow: hidden;
@@ -457,6 +461,5 @@ watch(
 
 .typing-overlay__input:focus {
   outline: none;
-  border-color: var(--accent);
 }
 </style>
