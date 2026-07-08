@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from app.services.html_splitter import (
     split_html_to_blocks,
 )
 
-from app.services.text_normalizer import texts_match as _texts_match
+from app.services.text_normalizer import prepare_display_text, texts_match as _texts_match
 
 DEFAULT_PAGE_SIZE = 4
 
@@ -48,7 +49,24 @@ def get_progress_or_create(db: Session, book: Book) -> Progress:
     return book.progress
 
 
-def ingest_book(db: Session, data_dir: Path, filename: str, data: bytes) -> Book:
+def _display_html(kind: str, html: str, text: str) -> str:
+    if kind == "heading":
+        tag_match = re.search(r"<(h[123])>", html)
+        tag = tag_match.group(1) if tag_match else "h1"
+        return f"<{tag}>{text}</{tag}>"
+    if kind == "blockquote":
+        return f"<blockquote>{text}</blockquote>"
+    return f"<p>{text}</p>"
+
+
+def ingest_book(
+    db: Session,
+    data_dir: Path,
+    filename: str,
+    data: bytes,
+    *,
+    char_mappings: dict[str, str] | None = None,
+) -> Book:
     book_format = validate_upload(filename, data)
     uploads_dir = data_dir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -76,14 +94,16 @@ def ingest_book(db: Session, data_dir: Path, filename: str, data: bytes) -> Book
     db.flush()
 
     for index, parsed in enumerate(parsed_blocks):
+        text_plain = prepare_display_text(parsed.text_plain, char_mappings)
+        html = _display_html(parsed.kind, parsed.html, text_plain)
         db.add(
             Block(
                 book_id=book.id,
                 index=index,
                 kind=parsed.kind,
-                html=parsed.html,
-                text_plain=parsed.text_plain,
-                char_count=len(parsed.text_plain),
+                html=html,
+                text_plain=text_plain,
+                char_count=len(text_plain),
             )
         )
 

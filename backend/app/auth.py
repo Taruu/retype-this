@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -21,9 +22,13 @@ def hash_password(plain: str) -> str:
 
 
 def verify_password(plain: str, password_hash: str) -> bool:
+    if not plain or not password_hash:
+        return False
+    if not password_hash.startswith("sha256:"):
+        return False
     expected = password_hash.removeprefix("sha256:")
     actual = hashlib.sha256(plain.encode("utf-8")).hexdigest()
-    return actual == expected
+    return secrets.compare_digest(actual, expected)
 
 
 def create_access_token(subject: str, secret_key: str) -> str:

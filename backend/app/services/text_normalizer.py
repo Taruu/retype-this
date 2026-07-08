@@ -1,17 +1,8 @@
 from __future__ import annotations
 
-import re
 import unicodedata
 
-DEFAULT_CHAR_MAPPINGS: dict[str, str] = {
-    "\u00ab": '"',  # «
-    "\u00bb": '"',  # »
-    "\u201e": '"',  # „
-    "\u201c": '"',  # "
-    "\u201d": '"',  # "
-    "\u2018": "'",  # '
-    "\u2019": "'",  # '
-}
+STRESS_MARK = "\u0301"
 
 
 def apply_char_mappings(text: str, mappings: dict[str, str]) -> str:
@@ -23,9 +14,24 @@ def apply_char_mappings(text: str, mappings: dict[str, str]) -> str:
     return result
 
 
+def clean_multilingual_text(text: str, char_mappings: dict[str, str] | None = None) -> str:
+    if not text:
+        return ""
+
+    mappings = char_mappings or {}
+    for original, replacement in mappings.items():
+        text = text.replace(original, replacement)
+
+    text = unicodedata.normalize("NFC", text)
+    text = text.replace(STRESS_MARK, "")
+    return text
+
+
 def normalize_whitespace(text: str, *, trim: bool) -> str:
-    normalized = re.sub(r"[\u00a0\u2000-\u200b\u202f\u205f\u3000]", " ", text)
-    normalized = re.sub(r"\s+", " ", normalized)
+    chars: list[str] = []
+    for ch in text:
+        chars.append(" " if ch.isspace() or ch in "\u00a0\u2000-\u200b\u202f\u205f\u3000" else ch)
+    normalized = "".join(chars)
     return normalized.strip() if trim else normalized
 
 
@@ -35,10 +41,13 @@ def normalize_typed_text(
     *,
     trim: bool = True,
 ) -> str:
-    mappings = char_mappings if char_mappings is not None else DEFAULT_CHAR_MAPPINGS
-    normalized = unicodedata.normalize("NFC", text or "")
-    normalized = apply_char_mappings(normalized, mappings)
+    normalized = clean_multilingual_text(text, char_mappings)
     return normalize_whitespace(normalized, trim=trim)
+
+
+def prepare_display_text(text: str, char_mappings: dict[str, str] | None = None) -> str:
+    """Normalize book text so stored view/expected text matches what the user types."""
+    return normalize_typed_text(text, char_mappings, trim=True)
 
 
 def texts_match(
@@ -47,5 +56,5 @@ def texts_match(
     char_mappings: dict[str, str] | None = None,
 ) -> bool:
     return normalize_typed_text(expected, char_mappings, trim=True) == normalize_typed_text(
-        typed, char_mappings, trim=True
+        typed, char_mappings, trim=False
     )

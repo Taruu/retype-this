@@ -7,8 +7,8 @@ const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-const username = ref('me')
-const password = ref('password')
+const username = ref('')
+const password = ref('')
 const localError = ref('')
 
 async function submit() {
@@ -24,22 +24,29 @@ async function submit() {
 </script>
 
 <template>
-  <main class="container" style="padding: 4rem 0;">
-    <section class="card" style="max-width: 420px; margin: 0 auto; padding: 2rem;">
-      <h1 style="margin-top: 0;">Retype Book</h1>
+  <main class="container login-page">
+    <section class="card login-card">
+      <h1 class="login-title">Retype Book</h1>
       <p class="muted">Sign in to upload books and practice touch typing.</p>
-      <form style="display: grid; gap: 1rem;" @submit.prevent="submit">
+      <form class="login-form" autocomplete="off" @submit.prevent="submit">
         <label>
           <div class="muted">Username</div>
-          <input v-model="username" autocomplete="username" style="width: 100%; padding: 0.65rem;" />
+          <input
+            v-model="username"
+            type="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            class="login-input"
+          />
         </label>
         <label>
           <div class="muted">Password</div>
           <input
             v-model="password"
             type="password"
-            autocomplete="current-password"
-            style="width: 100%; padding: 0.65rem;"
+            autocomplete="off"
+            class="login-input"
           />
         </label>
         <p v-if="localError" class="error">{{ localError }}</p>
@@ -50,3 +57,29 @@ async function submit() {
     </section>
   </main>
 </template>
+
+<style scoped>
+.login-page {
+  padding: 4rem 0;
+}
+
+.login-card {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.login-title {
+  margin-top: 0;
+}
+
+.login-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.login-input {
+  width: 100%;
+  padding: 0.65rem;
+}
+</style>
