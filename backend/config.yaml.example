@@ -1,0 +1,18 @@
+auth:
+  username: "me"
+  # SHA256 of your password: echo -n 'yourpassword' | sha256sum
+  password_hash: "sha256:5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+server:
+  secret_key: "change-me-to-a-random-secret-key"
+  data_dir: "data"
+
+typing:
+  # Map book punctuation to what you type on your keyboard.
+  char_mappings:
+    "«": '"'
+    "»": '"'
+    "„": '"'
+    "“": '"'
+    "”": '"'
+    "‘": "'"
+    "’": "'"
