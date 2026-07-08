@@ -1,9 +1,12 @@
 const SPACE_RE = /[\s\u00a0\u2000-\u200b\u202f\u205f\u3000]/
 
 let charMappings = {}
+const expectedCache = new Map()
+const EXPECTED_CACHE_MAX = 48
 
 export function setCharMappings(mappings) {
   charMappings = mappings || {}
+  expectedCache.clear()
 }
 
 export function getCharMappings() {
@@ -12,6 +15,10 @@ export function getCharMappings() {
 
 function isSpaceChar(ch) {
   return SPACE_RE.test(ch)
+}
+
+function hasCharMappings() {
+  return Object.keys(charMappings).some((key) => key)
 }
 
 function normalizeNfc(text) {
@@ -46,6 +53,19 @@ export function normalizeText(text) {
 /** Normalize typed text while user is still typing — do not trim end spaces. */
 export function normalizeTypedLive(text) {
   return normalizeCore(text, { trim: false })
+}
+
+function getExpectedNormalized(expected) {
+  let cached = expectedCache.get(expected)
+  if (!cached) {
+    cached = normalizeExpectedWithMap(expected)
+    if (expectedCache.size >= EXPECTED_CACHE_MAX) {
+      const firstKey = expectedCache.keys().next().value
+      expectedCache.delete(firstKey)
+    }
+    expectedCache.set(expected, cached)
+  }
+  return cached
 }
 
 /**
@@ -102,106 +122,352 @@ export function normalizeExpectedWithMap(expected) {
   }
 }
 
-export function compareTypedText(expected, typed) {
-  const { normalized: exp } = normalizeExpectedWithMap(expected)
-  const typ = normalizeTypedLive(typed)
-  const complete = exp.length > 0 && exp === normalizeText(typed)
-
-  let matchedChars = 0
-  while (
-    matchedChars < exp.length &&
-    matchedChars < typ.length &&
-    exp[matchedChars] === typ[matchedChars]
-  ) {
-    matchedChars += 1
+/** O(n) map from normalized typed indices to raw string indices. */
+function normalizeTypedWithRawMap(typed) {
+  if (!typed) {
+    return { normalized: '', normToRawStart: [], normToRawEnd: [] }
   }
 
-  const totalChars = exp.length
-  const progress = totalChars > 0 ? matchedChars / totalChars : 0
-  const mismatchAt = matchedChars < typ.length || matchedChars < exp.length ? matchedChars : -1
+  if (!hasCharMappings()) {
+    const chars = []
+    const normToRawStart = []
+    const normToRawEnd = []
+    let i = 0
+
+    while (i < typed.length) {
+      if (isSpaceChar(typed[i])) {
+        if (chars.length > 0 && chars[chars.length - 1] !== ' ') {
+          chars.push(' ')
+          normToRawStart.push(i)
+          normToRawEnd.push(i)
+        }
+        while (i < typed.length && isSpaceChar(typed[i])) {
+          i += 1
+        }
+        continue
+      }
+
+      chars.push(typed[i])
+      normToRawStart.push(i)
+      normToRawEnd.push(i + 1)
+      i += 1
+    }
+
+    return {
+      normalized: chars.join(''),
+      normToRawStart,
+      normToRawEnd,
+    }
+  }
+
+  const source = normalizeNfc(typed)
+  const chars = []
+  const normToRawStart = []
+  const normToRawEnd = []
+  let i = 0
+
+  while (i < source.length) {
+    if (isSpaceChar(source[i])) {
+      if (chars.length > 0 && chars[chars.length - 1] !== ' ') {
+        chars.push(' ')
+        normToRawStart.push(i)
+        normToRawEnd.push(Math.min(i + 1, typed.length))
+      }
+      while (i < source.length && isSpaceChar(source[i])) {
+        i += 1
+      }
+      continue
+    }
+
+    let mappedText = source[i]
+    let consumed = 1
+    for (const [from, to] of Object.entries(charMappings)) {
+      if (from && source.startsWith(from, i)) {
+        mappedText = to
+        consumed = from.length
+        break
+      }
+    }
+
+    const rawEnd = Math.min(i + consumed, typed.length)
+    for (const ch of mappedText) {
+      chars.push(ch)
+      normToRawStart.push(i)
+      normToRawEnd.push(rawEnd)
+    }
+    i += consumed
+  }
 
   return {
-    complete,
-    progress: complete ? 1 : Math.min(progress, 1),
-    matchedChars,
-    totalChars,
-    mismatchAt,
-    prefixMatch: typ.length <= exp.length && exp.startsWith(typ),
+    normalized: chars.join(''),
+    normToRawStart,
+    normToRawEnd,
   }
 }
 
-/** Map normalized character range back to original expected substring. */
-function getExpectedSliceFromNorm(expected, normStart, normEnd) {
-  const { indexMap } = normalizeExpectedWithMap(expected)
+/**
+ * O(n) greedy alignment for live typing feedback.
+ * Re-syncs after substitutions/insertions/deletions without full diff cost.
+ */
+function alignTypedToExpected(exp, typ) {
+  const ops = []
+  let ei = 0
+  let ti = 0
+
+  const pushEqual = (expStart, expEnd, typStart, typEnd) => {
+    if (expEnd > expStart) {
+      ops.push({ op: 'equal', expStart, expEnd, typStart, typEnd })
+    }
+  }
+
+  while (ei < exp.length || ti < typ.length) {
+    if (ei < exp.length && ti < typ.length && exp[ei] === typ[ti]) {
+      const expStart = ei
+      const typStart = ti
+      do {
+        ei += 1
+        ti += 1
+      } while (ei < exp.length && ti < typ.length && exp[ei] === typ[ti])
+      pushEqual(expStart, ei, typStart, ti)
+      continue
+    }
+
+    if (ti >= typ.length) {
+      ops.push({ op: 'delete', expStart: ei, expEnd: exp.length })
+      break
+    }
+    if (ei >= exp.length) {
+      ops.push({ op: 'insert', typStart: ti, typEnd: typ.length })
+      break
+    }
+
+    if (ti + 1 < typ.length && exp[ei] === typ[ti + 1]) {
+      ops.push({ op: 'insert', typStart: ti, typEnd: ti + 1 })
+      ti += 1
+      continue
+    }
+
+    if (ei + 1 < exp.length && typ[ti] === exp[ei + 1]) {
+      ops.push({ op: 'delete', expStart: ei, expEnd: ei + 1 })
+      ei += 1
+      continue
+    }
+
+    ops.push({
+      op: 'replace',
+      expStart: ei,
+      expEnd: ei + 1,
+      typStart: ti,
+      typEnd: ti + 1,
+    })
+    ei += 1
+    ti += 1
+  }
+
+  return ops
+}
+
+function getExpectedSliceFromNorm(expected, indexMap, normStart, normEnd) {
   if (normStart >= normEnd || normStart >= indexMap.length) return ''
   const origStart = normStart === 0 ? 0 : indexMap[normStart - 1] + 1
   const origEnd = indexMap[Math.min(normEnd, indexMap.length) - 1] + 1
   return origEnd > origStart ? expected.slice(origStart, origEnd) : ''
 }
 
-/**
- * Split expected text into matched / error / pending segments for overlay display.
- */
-export function buildOverlaySegments(expected, typed) {
-  const { normalized: exp, indexMap } = normalizeExpectedWithMap(expected)
-  const typ = normalizeTypedLive(typed)
-  const comparison = compareTypedText(expected, typed)
+function getRawTypedSlice(typed, normToRawStart, normToRawEnd, typStart, typEnd) {
+  if (typStart >= typEnd || !typed) return ''
+  const rawStart = normToRawStart[typStart] ?? 0
+  const rawEnd = normToRawEnd[typEnd - 1] ?? typed.length
+  return typed.slice(rawStart, rawEnd)
+}
+
+function mergeAdjacentSegments(segments) {
+  if (!segments.length) return segments
+  const merged = [{ ...segments[0] }]
+  for (let i = 1; i < segments.length; i += 1) {
+    const prev = merged[merged.length - 1]
+    const curr = segments[i]
+    if (prev.state === curr.state) {
+      prev.text += curr.text
+    } else {
+      merged.push({ ...curr })
+    }
+  }
+  return merged
+}
+
+function buildGuideSegments(expected, indexMap, ops, complete, typed) {
+  const { normalized: exp } = getExpectedNormalized(expected)
 
   if (!exp.length) {
     return [{ text: expected, state: 'pending' }]
   }
-  if (!typ.length) {
+  if (!typed) {
     return [{ text: expected, state: 'pending' }]
   }
-  if (comparison.complete) {
+  if (complete) {
     return [{ text: expected, state: 'matched' }]
   }
 
-  const matched = comparison.matchedChars
   const segments = []
 
-  const sliceFromNorm = (normStart, normEnd, state) => {
-    const slice = getExpectedSliceFromNorm(expected, normStart, normEnd)
+  const pushSlice = (normStart, normEnd, state) => {
+    if (normEnd <= normStart) return
+    const slice = getExpectedSliceFromNorm(expected, indexMap, normStart, normEnd)
     if (slice) {
       segments.push({ text: slice, state })
     }
   }
 
-  if (matched > 0) {
-    sliceFromNorm(0, matched, 'matched')
-  }
-
-  const hasMismatch = typ.length > matched
-  if (hasMismatch && matched < exp.length) {
-    // Hide as many expected chars as typed typo chars so typos replace, not stack on, pending text.
-    const typoLen = typ.length - matched
-    const hiddenCount = Math.min(typoLen, exp.length - matched)
-    sliceFromNorm(matched, matched + hiddenCount, 'hidden')
-    const pendingNormStart = matched + hiddenCount
-    if (pendingNormStart < exp.length) {
-      const pendingStart = pendingNormStart === 0 ? 0 : indexMap[pendingNormStart - 1] + 1
-      if (pendingStart < expected.length) {
-        segments.push({ text: expected.slice(pendingStart), state: 'pending' })
-      }
-    }
-  } else if (matched < exp.length) {
-    const pendingStart = matched > 0 ? indexMap[matched - 1] + 1 : 0
-    if (pendingStart < expected.length) {
-      segments.push({ text: expected.slice(pendingStart), state: 'pending' })
+  for (const op of ops) {
+    if (op.op === 'equal') {
+      pushSlice(op.expStart, op.expEnd, 'matched')
+    } else if (op.op === 'delete') {
+      pushSlice(op.expStart, op.expEnd, 'pending')
+    } else if (op.op === 'replace') {
+      pushSlice(op.expStart, op.expEnd, 'hidden')
     }
   }
 
-  return segments.length ? segments : [{ text: expected, state: 'pending' }]
+  return mergeAdjacentSegments(
+    segments.length ? segments : [{ text: expected, state: 'pending' }],
+  )
 }
 
-function findRawIndexForNormLength(raw, normLen) {
-  if (normLen <= 0) return 0
-  for (let i = 1; i <= raw.length; i += 1) {
-    if (normalizeTypedLive(raw.slice(0, i)).length >= normLen) {
-      return i
+function buildTypedSegmentsFromOps(
+  expected,
+  indexMap,
+  typed,
+  normToRawStart,
+  normToRawEnd,
+  ops,
+  complete,
+) {
+  if (!typed) return []
+
+  if (complete) {
+    return [{ text: expected, state: 'correct' }]
+  }
+
+  const segments = []
+
+  for (const op of ops) {
+    if (op.op === 'equal') {
+      segments.push({
+        text: getExpectedSliceFromNorm(expected, indexMap, op.expStart, op.expEnd),
+        state: 'correct',
+      })
+    } else if (op.op === 'replace' || op.op === 'insert') {
+      const typoText = getRawTypedSlice(typed, normToRawStart, normToRawEnd, op.typStart, op.typEnd)
+      if (typoText) {
+        segments.push({ text: typoText, state: 'typo' })
+      }
     }
   }
-  return raw.length
+
+  return mergeAdjacentSegments(
+    segments.length ? segments : [{ text: typed, state: 'typo' }],
+  )
+}
+
+function analyzeTypingCore(expected, typed) {
+  const { normalized: exp, indexMap } = getExpectedNormalized(expected)
+  const { normalized: typ, normToRawStart, normToRawEnd } = normalizeTypedWithRawMap(typed || '')
+  const complete = exp.length > 0 && exp === normalizeText(typed)
+  const ops = alignTypedToExpected(exp, typ)
+
+  let matchedChars = 0
+  let hasTypos = false
+  let mismatchAt = -1
+
+  for (const op of ops) {
+    if (op.op === 'equal') {
+      matchedChars += op.expEnd - op.expStart
+      continue
+    }
+    if (!hasTypos) {
+      hasTypos = true
+      mismatchAt = op.expStart ?? op.typStart ?? 0
+    }
+  }
+
+  const totalChars = exp.length
+  const progress = complete
+    ? 1
+    : totalChars > 0
+      ? Math.min(matchedChars / totalChars, hasTypos ? 0.99 : 1)
+      : 0
+  const prefixMatch = typ.length <= exp.length && exp.startsWith(typ)
+
+  return {
+    exp,
+    indexMap,
+    typ,
+    normToRawStart,
+    normToRawEnd,
+    ops,
+    complete,
+    matchedChars,
+    totalChars,
+    progress,
+    mismatchAt,
+    hasTypos,
+    prefixMatch,
+  }
+}
+
+/**
+ * Single-pass analysis for overlay rendering — call once per frame, not per computed.
+ */
+export function analyzeTypingState(expected, typed) {
+  const core = analyzeTypingCore(expected, typed)
+  const guideSegments = buildGuideSegments(
+    expected,
+    core.indexMap,
+    core.ops,
+    core.complete,
+    typed,
+  )
+  const typedSegments = buildTypedSegmentsFromOps(
+    expected,
+    core.indexMap,
+    typed,
+    core.normToRawStart,
+    core.normToRawEnd,
+    core.ops,
+    core.complete,
+  )
+
+  return {
+    complete: core.complete,
+    progress: core.progress,
+    matchedChars: core.matchedChars,
+    totalChars: core.totalChars,
+    mismatchAt: core.mismatchAt,
+    prefixMatch: core.prefixMatch,
+    hasTypos: core.hasTypos,
+    guideSegments,
+    typedSegments,
+  }
+}
+
+export function compareTypedText(expected, typed) {
+  const core = analyzeTypingCore(expected, typed)
+  return {
+    complete: core.complete,
+    progress: core.progress,
+    matchedChars: core.matchedChars,
+    totalChars: core.totalChars,
+    mismatchAt: core.mismatchAt,
+    prefixMatch: core.prefixMatch,
+  }
+}
+
+/**
+ * Split expected text into matched / error / pending segments for overlay display.
+ */
+export function buildOverlaySegments(expected, typed) {
+  return analyzeTypingState(expected, typed).guideSegments
 }
 
 /**
@@ -209,32 +475,7 @@ function findRawIndexForNormLength(raw, normLen) {
  * (so e.g. " aligns with «), wrong chars shown as typos.
  */
 export function buildTypedSegments(expected, typed) {
-  if (!typed) return []
-
-  const comparison = compareTypedText(expected, typed)
-  const typ = normalizeTypedLive(typed)
-  const matched = comparison.matchedChars
-
-  if (comparison.complete) {
-    return [{ text: expected, state: 'correct' }]
-  }
-
-  if (matched >= typ.length) {
-    const displayText = getExpectedSliceFromNorm(expected, 0, matched)
-    return [{ text: displayText, state: 'correct' }]
-  }
-
-  const rawMatchEnd = findRawIndexForNormLength(typed, matched)
-  const segments = []
-
-  if (matched > 0) {
-    segments.push({ text: getExpectedSliceFromNorm(expected, 0, matched), state: 'correct' })
-  }
-  if (rawMatchEnd < typed.length) {
-    segments.push({ text: typed.slice(rawMatchEnd), state: 'typo' })
-  }
-
-  return segments.length ? segments : [{ text: typed, state: 'typo' }]
+  return analyzeTypingState(expected, typed).typedSegments
 }
 
 /** @deprecated use buildOverlaySegments */

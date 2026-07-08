@@ -1,16 +1,15 @@
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
-  buildOverlaySegments,
-  buildTypedSegments,
+  analyzeTypingState,
   clearDraft,
-  compareTypedText,
   loadDraft,
   normalizeText,
   saveDraft,
 } from '../utils/textMatch'
 
 const IDLE_SAVE_MS = 15000
+const DRAFT_SAVE_MS = 400
 
 const props = defineProps({
   bookId: { type: Number, required: true },
@@ -24,10 +23,13 @@ const emit = defineEmits(['update:draft', 'complete', 'save'])
 const submitBlockCompletion = inject('submitBlockCompletion', null)
 
 const text = ref('')
+const overlayText = ref('')
 const completing = ref(false)
 const guideRef = ref(null)
 const inputRef = ref(null)
 let idleTimer = null
+let draftTimer = null
+let overlayRaf = null
 let needsServerSave = false
 
 function emitDraft() {
@@ -47,7 +49,9 @@ function emitSave() {
 
 function restoreDraft() {
   const local = loadDraft(props.bookId, props.blockIndex)
-  text.value = props.initialDraft || local || ''
+  const draft = props.initialDraft || local || ''
+  text.value = draft
+  overlayText.value = draft
   needsServerSave = false
   emitDraft()
 }
@@ -62,12 +66,12 @@ watch(
   { immediate: true },
 )
 
-const comparison = computed(() => compareTypedText(props.expectedText, text.value))
-const isComplete = computed(() => comparison.value.complete || completing.value)
-const guideSegments = computed(() => buildOverlaySegments(props.expectedText, text.value))
-const typedSegments = computed(() => buildTypedSegments(props.expectedText, text.value))
-const progressPercent = computed(() => Math.round(comparison.value.progress * 100))
-const hasTypos = computed(() => typedSegments.value.some((segment) => segment.state === 'typo'))
+const typingState = computed(() => analyzeTypingState(props.expectedText, overlayText.value))
+const isComplete = computed(() => typingState.value.complete || completing.value)
+const guideSegments = computed(() => typingState.value.guideSegments)
+const typedSegments = computed(() => typingState.value.typedSegments)
+const progressPercent = computed(() => Math.round(typingState.value.progress * 100))
+const hasTypos = computed(() => typingState.value.hasTypos)
 
 const statusMessage = computed(() => {
   if (!text.value.trim()) {
@@ -79,7 +83,7 @@ const statusMessage = computed(() => {
   if (hasTypos.value) {
     return 'Fix red characters to continue.'
   }
-  const { matchedChars, totalChars } = comparison.value
+  const { matchedChars, totalChars } = typingState.value
   return `${matchedChars} / ${totalChars} characters matched.`
 })
 
@@ -104,6 +108,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('mousemove', onMouseMove)
   clearTimeout(idleTimer)
+  clearTimeout(draftTimer)
+  if (overlayRaf) {
+    cancelAnimationFrame(overlayRaf)
+  }
+  flushDraftSave()
   emitSave()
 })
 
@@ -124,16 +133,37 @@ function onMouseMove() {
   emitSave()
 }
 
-function onInput() {
+function flushDraftSave() {
+  clearTimeout(draftTimer)
   saveDraft(props.bookId, props.blockIndex, text.value)
+}
+
+function scheduleDraftSave() {
+  clearTimeout(draftTimer)
+  draftTimer = setTimeout(flushDraftSave, DRAFT_SAVE_MS)
+}
+
+function scheduleOverlayUpdate() {
+  if (overlayRaf) return
+  overlayRaf = requestAnimationFrame(() => {
+    overlayText.value = text.value
+    overlayRaf = null
+  })
+}
+
+function onInput(event) {
+  text.value = event.target.value
   emitDraft()
   needsServerSave = true
+  scheduleDraftSave()
   scheduleIdleSave()
-  requestAnimationFrame(syncInputHeight)
+  scheduleOverlayUpdate()
 }
 
 async function autoComplete() {
-  if (!comparison.value.complete || completing.value) return
+  if (completing.value) return
+  const state = analyzeTypingState(props.expectedText, text.value)
+  if (!state.complete) return
   completing.value = true
   clearTimeout(idleTimer)
   needsServerSave = false
@@ -158,9 +188,9 @@ async function autoComplete() {
 }
 
 watch(
-  () => comparison.value.complete,
+  () => typingState.value.complete,
   (complete) => {
-    if (complete && text.value) {
+    if (complete && text.value && !completing.value) {
       autoComplete()
     }
   },
@@ -199,7 +229,7 @@ watch(
       </div>
       <textarea
         ref="inputRef"
-        v-model="text"
+        :value="text"
         class="typing-overlay__input"
         spellcheck="false"
         autocapitalize="off"
@@ -236,7 +266,6 @@ watch(
 .typing-overlay__progress-bar {
   height: 100%;
   background: var(--accent);
-  transition: width 0.15s ease;
 }
 
 .typing-overlay--complete .typing-overlay__progress-bar {
