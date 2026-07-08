@@ -190,15 +190,13 @@ function normalizeTypedWithRawMap(typed) {
 }
 
 /**
- * O(n) greedy alignment for live typing feedback.
- * Insert/delete re-sync is only allowed before the first typo so later
- * characters (especially after spaces) stay aligned with what was typed.
+ * Strict position-by-position alignment: typed[i] must match expected[i].
+ * No insert/delete re-sync — extra or skipped characters are typos.
  */
 function alignTypedToExpected(exp, typ) {
   const ops = []
   let ei = 0
   let ti = 0
-  let seenTypo = false
 
   const pushEqual = (expStart, expEnd, typStart, typEnd) => {
     if (expEnd > expStart) {
@@ -219,32 +217,12 @@ function alignTypedToExpected(exp, typ) {
     }
 
     if (ti >= typ.length) {
-      ops.push({ op: 'delete', expStart: ei, expEnd: exp.length })
+      ops.push({ op: 'delete', expStart: ei, expEnd: exp.length, untyped: true })
       break
     }
     if (ei >= exp.length) {
       ops.push({ op: 'insert', typStart: ti, typEnd: typ.length })
       break
-    }
-
-    if (!seenTypo) {
-      if (ti + 1 < typ.length && exp[ei] === typ[ti + 1]) {
-        ops.push({ op: 'insert', typStart: ti, typEnd: ti + 1 })
-        seenTypo = true
-        ti += 1
-        continue
-      }
-
-      if (
-        ei + 1 < exp.length &&
-        typ[ti] === exp[ei + 1] &&
-        exp[ei] !== ' ' &&
-        typ[ti] !== ' '
-      ) {
-        ops.push({ op: 'delete', expStart: ei, expEnd: ei + 1 })
-        ei += 1
-        continue
-      }
     }
 
     ops.push({
@@ -254,7 +232,6 @@ function alignTypedToExpected(exp, typ) {
       typStart: ti,
       typEnd: ti + 1,
     })
-    seenTypo = true
     ei += 1
     ti += 1
   }
@@ -284,7 +261,7 @@ function mergeAdjacentSegments(segments) {
   return merged
 }
 
-function buildGuideSegments(expected, indexMap, ops, complete, typed) {
+function buildGuideSegments(expected, indexMap, ops, complete, typed, hasTypos) {
   const { normalized: exp } = getExpectedNormalized(expected)
 
   if (!exp.length) {
@@ -311,9 +288,9 @@ function buildGuideSegments(expected, indexMap, ops, complete, typed) {
     if (op.op === 'equal') {
       pushSlice(op.expStart, op.expEnd, 'matched')
     } else if (op.op === 'delete') {
-      pushSlice(op.expStart, op.expEnd, 'pending')
+      pushSlice(op.expStart, op.expEnd, op.skipped && hasTypos ? 'hint' : 'pending')
     } else if (op.op === 'replace') {
-      pushSlice(op.expStart, op.expEnd, 'hidden')
+      pushSlice(op.expStart, op.expEnd, 'hint')
     }
   }
 
@@ -384,10 +361,12 @@ function analyzeTypingCore(expected, typed) {
       matchedChars += op.expEnd - op.expStart
       continue
     }
-    // Only wrong/extra typed chars are typos — not untyped expected text (delete).
-    if ((op.op === 'insert' || op.op === 'replace') && !hasTypos) {
+    // Wrong or extra typed chars are typos — not untyped expected text (delete).
+    if (op.op === 'insert' || op.op === 'replace') {
+      if (!hasTypos) {
+        mismatchAt = op.expStart ?? op.typStart ?? 0
+      }
       hasTypos = true
-      mismatchAt = op.expStart ?? op.typStart ?? 0
     }
   }
 
@@ -397,7 +376,7 @@ function analyzeTypingCore(expected, typed) {
     : totalChars > 0
       ? Math.min(matchedChars / totalChars, hasTypos ? 0.99 : 1)
       : 0
-  const prefixMatch = typ.length <= exp.length && exp.startsWith(typ)
+  const prefixMatch = typ.length <= exp.length && typ === exp.slice(0, typ.length)
 
   return {
     exp,
@@ -427,6 +406,7 @@ export function analyzeTypingState(expected, typed) {
     core.ops,
     core.complete,
     typed,
+    core.hasTypos,
   )
   const typedSegments = buildTypedSegmentsFromOps(
     typed,

@@ -25,6 +25,7 @@ const submitBlockCompletion = inject('submitBlockCompletion', null)
 const text = ref('')
 const completing = ref(false)
 const guideRef = ref(null)
+const hintsRef = ref(null)
 const typedRef = ref(null)
 const inputRef = ref(null)
 let idleTimer = null
@@ -72,13 +73,13 @@ const hasTypos = computed(() => typingState.value.hasTypos)
 
 const statusMessage = computed(() => {
   if (!text.value.trim()) {
-    return 'Type over the text — your typos appear in red.'
+    return 'Type over the text exactly — one character at a time.'
   }
   if (isComplete.value) {
     return '✓ Match — moving to next block…'
   }
   if (hasTypos.value) {
-    return 'Fix red characters to continue.'
+    return 'Fix red characters to match each symbol exactly.'
   }
   const { matchedChars, totalChars } = typingState.value
   return `${matchedChars} / ${totalChars} characters matched.`
@@ -86,11 +87,22 @@ const statusMessage = computed(() => {
 
 function syncInputHeight() {
   const guideH = guideRef.value?.offsetHeight ?? 0
+  const hintsH = hintsRef.value?.offsetHeight ?? 0
   const typedH = typedRef.value?.offsetHeight ?? 0
-  const height = Math.max(guideH, typedH)
+  const height = Math.max(guideH, hintsH, typedH)
   if (inputRef.value && height) {
     inputRef.value.style.height = `${height}px`
   }
+}
+
+function guideSegmentClass(segment) {
+  if (segment.state === 'hint') return 'typing-overlay__hidden'
+  return `typing-overlay__${segment.state}`
+}
+
+function hintSegmentClass(segment) {
+  if (segment.state === 'hint') return 'typing-overlay__hint typing-overlay__hint--float'
+  return 'typing-overlay__hints-spacer'
 }
 
 function focusInput() {
@@ -205,7 +217,14 @@ watch(
         <span
           v-for="(segment, index) in guideSegments"
           :key="`g-${index}`"
-          :class="`typing-overlay__${segment.state}`"
+          :class="guideSegmentClass(segment)"
+        >{{ segment.text }}</span>
+      </div>
+      <div ref="hintsRef" class="typing-overlay__hints" aria-hidden="true">
+        <span
+          v-for="(segment, index) in guideSegments"
+          :key="`h-${index}`"
+          :class="hintSegmentClass(segment)"
         >{{ segment.text }}</span>
       </div>
       <div ref="typedRef" class="typing-overlay__typed" aria-hidden="true">
@@ -233,6 +252,7 @@ watch(
   padding: 0.5rem 0.65rem;
   margin-top: 0.2rem;
   border: 1px solid var(--border);
+  overflow: visible;
 }
 
 .typing-overlay--complete {
@@ -325,6 +345,41 @@ watch(
 
 .typing-overlay__hidden {
   color: transparent;
+}
+
+.typing-overlay__hints {
+  position: absolute;
+  inset: 0;
+  z-index: 1.5;
+  pointer-events: none;
+  padding: var(--typing-pad-y) var(--typing-pad-x);
+  font-family: var(--font-typing);
+  font-size: var(--typing-size);
+  line-height: var(--typing-line);
+  letter-spacing: 0;
+  font-weight: 400;
+  font-variant-ligatures: none;
+  font-feature-settings: normal;
+  tab-size: 4;
+  white-space: pre-wrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.typing-overlay__hints-spacer {
+  color: transparent;
+}
+
+.typing-overlay__hint {
+  color: #fff;
+  background: #ef6c00;
+}
+
+.typing-overlay__hint--float {
+  position: relative;
+  display: inline-block;
+  transform: translateY(calc(-1 * var(--typing-line) * 1em));
+  vertical-align: bottom;
 }
 
 .typing-overlay__typed {
