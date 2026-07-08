@@ -1,0 +1,98 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f4f1ea;
+  --surface: #fffdf8;
+  --text: #1f1a14;
+  --muted: #6b6258;
+  --accent: #2f6fed;
+  --accent-soft: #dce8ff;
+  --border: #ddd4c6;
+  --success: #1f7a4d;
+  --danger: #b42318;
+  --locked: #9a9084;
+  --font-typing: "Cutive Mono", "Courier New", Courier, "Liberation Mono", monospace;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #fff9ef 0%, var(--bg) 55%);
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.container {
+  width: min(960px, calc(100% - 2rem));
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(31, 26, 20, 0.06);
+}
+
+.btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: white;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.heading-block :is(h1, h2, h3) {
+  margin: 0 0 0.75rem;
+}
+
+.paragraph-block {
+  margin: 0 0 1rem;
+}
+
+.block-done {
+  opacity: 0.72;
+}
+
+.block-locked {
+  color: var(--locked);
+  font-style: italic;
+}
