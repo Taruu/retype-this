@@ -5,9 +5,21 @@ from pathlib import Path
 
 import yaml
 
-from app.services.text_normalizer import DEFAULT_CHAR_MAPPINGS
-
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+
+DEFAULT_CHAR_MAPPINGS: dict[str, str] = {
+    "\u00ab": '"',  # «
+    "\u00bb": '"',  # »
+    "\u201e": '"',  # „
+    "\u201c": '"',  # "
+    "\u201d": '"',  # "
+    "\u2018": "'",  # '
+    "\u2019": "'",  # '
+    "\u2014": "-",  # em-dash
+    "\u2013": "-",  # en-dash
+    "\u2026": "...",  # ellipsis
+    "\xa0": " ",  # non-breaking space
+}
 
 
 @dataclass(frozen=True)
@@ -53,10 +65,18 @@ def load_config(path: Path | None = None) -> AppConfig:
     if not isinstance(char_mappings, dict):
         raise ValueError("typing.char_mappings must be a mapping of source to target characters")
 
+    auth_raw = raw.get("auth") or {}
+    username = str(auth_raw.get("username", "")).strip()
+    password_hash = str(auth_raw.get("password_hash", "")).strip()
+    if not username:
+        raise ValueError("auth.username is required in config.yaml")
+    if not password_hash.startswith("sha256:") or len(password_hash) <= len("sha256:"):
+        raise ValueError("auth.password_hash must be a sha256:... hash in config.yaml")
+
     return AppConfig(
         auth=AuthConfig(
-            username=raw["auth"]["username"],
-            password_hash=raw["auth"]["password_hash"],
+            username=username,
+            password_hash=password_hash,
         ),
         server=ServerConfig(
             secret_key=raw["server"]["secret_key"],

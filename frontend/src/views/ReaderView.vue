@@ -37,7 +37,7 @@ const saveStatusTitle = computed(() => {
     case 'saving':
       return 'Auto-saving your progress…'
     case 'unsaved':
-      return 'Changes not saved yet — auto-save runs after you pause typing'
+      return 'Changes not saved yet — auto-save runs when you move the mouse or pause typing'
     case 'error':
       return 'Could not save — will retry on next auto-save'
     default:
@@ -187,9 +187,13 @@ function onDraft({ blockIndex, text }) {
   }
 }
 
-function onSave({ blockIndex, text }) {
-  if (blockIndex === reader.progress.typing_block_index) {
-    reader.saveDraftToServer(text)
+async function onSave({ blockIndex, text, onSaved }) {
+  if (blockIndex !== reader.progress.typing_block_index) return
+  try {
+    await reader.saveDraftToServer(text)
+    onSaved?.()
+  } catch {
+    // needsServerSave stays true — next mouse move or idle timer retries
   }
 }
 

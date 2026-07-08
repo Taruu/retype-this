@@ -11,7 +11,6 @@ import {
 } from '../utils/textMatch'
 
 const IDLE_SAVE_MS = 15000
-const MOUSE_SAVE_MS = 2000
 
 const props = defineProps({
   bookId: { type: Number, required: true },
@@ -29,20 +28,27 @@ const completing = ref(false)
 const guideRef = ref(null)
 const inputRef = ref(null)
 let idleTimer = null
-let mouseTimer = null
+let needsServerSave = false
 
 function emitDraft() {
   emit('update:draft', { blockIndex: props.blockIndex, text: text.value })
 }
 
 function emitSave() {
-  if (completing.value) return
-  emit('save', { blockIndex: props.blockIndex, text: text.value })
+  if (completing.value || !needsServerSave) return
+  emit('save', {
+    blockIndex: props.blockIndex,
+    text: text.value,
+    onSaved: () => {
+      needsServerSave = false
+    },
+  })
 }
 
 function restoreDraft() {
   const local = loadDraft(props.bookId, props.blockIndex)
   text.value = props.initialDraft || local || ''
+  needsServerSave = false
   emitDraft()
 }
 
@@ -98,7 +104,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('mousemove', onMouseMove)
   clearTimeout(idleTimer)
-  clearTimeout(mouseTimer)
   emitSave()
 })
 
@@ -114,15 +119,15 @@ function scheduleIdleSave() {
 }
 
 function onMouseMove() {
-  clearTimeout(mouseTimer)
-  mouseTimer = setTimeout(() => {
-    emitSave()
-  }, MOUSE_SAVE_MS)
+  if (!needsServerSave || completing.value) return
+  clearTimeout(idleTimer)
+  emitSave()
 }
 
 function onInput() {
   saveDraft(props.bookId, props.blockIndex, text.value)
   emitDraft()
+  needsServerSave = true
   scheduleIdleSave()
   requestAnimationFrame(syncInputHeight)
 }
@@ -131,7 +136,7 @@ async function autoComplete() {
   if (!comparison.value.complete || completing.value) return
   completing.value = true
   clearTimeout(idleTimer)
-  clearTimeout(mouseTimer)
+  needsServerSave = false
   const normalized = normalizeText(text.value)
   try {
     if (submitBlockCompletion) {
