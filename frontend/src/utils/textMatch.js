@@ -34,10 +34,15 @@ function applyCharMappings(text) {
   return result
 }
 
+function canonicalizeSpaceChar(ch) {
+  return SPACE_RE.test(ch) ? ' ' : ch
+}
+
 function normalizeWhitespace(text, { trim }) {
-  let result = text
-    .replace(/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, ' ')
-    .replace(/\s+/g, ' ')
+  let result = ''
+  for (const ch of text) {
+    result += canonicalizeSpaceChar(ch)
+  }
   return trim ? result.trim() : result
 }
 
@@ -77,19 +82,11 @@ export function normalizeExpectedWithMap(expected) {
   const indexMap = []
   let i = 0
 
-  while (i < source.length && isSpaceChar(source[i])) {
-    i += 1
-  }
-
   while (i < source.length) {
     if (isSpaceChar(source[i])) {
-      if (chars.length > 0 && chars[chars.length - 1] !== ' ') {
-        chars.push(' ')
-        indexMap.push(i)
-      }
-      while (i < source.length && isSpaceChar(source[i])) {
-        i += 1
-      }
+      chars.push(' ')
+      indexMap.push(i)
+      i += 1
       continue
     }
 
@@ -109,11 +106,6 @@ export function normalizeExpectedWithMap(expected) {
       indexMap.push(originalEnd)
     }
     i += consumed
-  }
-
-  while (chars.length > 0 && chars[chars.length - 1] === ' ') {
-    chars.pop()
-    indexMap.pop()
   }
 
   return {
@@ -136,14 +128,10 @@ function normalizeTypedWithRawMap(typed) {
 
     while (i < typed.length) {
       if (isSpaceChar(typed[i])) {
-        if (chars.length > 0 && chars[chars.length - 1] !== ' ') {
-          chars.push(' ')
-          normToRawStart.push(i)
-          normToRawEnd.push(i)
-        }
-        while (i < typed.length && isSpaceChar(typed[i])) {
-          i += 1
-        }
+        chars.push(' ')
+        normToRawStart.push(i)
+        normToRawEnd.push(i + 1)
+        i += 1
         continue
       }
 
@@ -168,14 +156,10 @@ function normalizeTypedWithRawMap(typed) {
 
   while (i < source.length) {
     if (isSpaceChar(source[i])) {
-      if (chars.length > 0 && chars[chars.length - 1] !== ' ') {
-        chars.push(' ')
-        normToRawStart.push(i)
-        normToRawEnd.push(Math.min(i + 1, typed.length))
-      }
-      while (i < source.length && isSpaceChar(source[i])) {
-        i += 1
-      }
+      chars.push(' ')
+      normToRawStart.push(i)
+      normToRawEnd.push(Math.min(i + 1, typed.length))
+      i += 1
       continue
     }
 
@@ -207,12 +191,14 @@ function normalizeTypedWithRawMap(typed) {
 
 /**
  * O(n) greedy alignment for live typing feedback.
- * Re-syncs after substitutions/insertions/deletions without full diff cost.
+ * Insert/delete re-sync is only allowed before the first typo so later
+ * characters (especially after spaces) stay aligned with what was typed.
  */
 function alignTypedToExpected(exp, typ) {
   const ops = []
   let ei = 0
   let ti = 0
+  let seenTypo = false
 
   const pushEqual = (expStart, expEnd, typStart, typEnd) => {
     if (expEnd > expStart) {
@@ -241,16 +227,24 @@ function alignTypedToExpected(exp, typ) {
       break
     }
 
-    if (ti + 1 < typ.length && exp[ei] === typ[ti + 1]) {
-      ops.push({ op: 'insert', typStart: ti, typEnd: ti + 1 })
-      ti += 1
-      continue
-    }
+    if (!seenTypo) {
+      if (ti + 1 < typ.length && exp[ei] === typ[ti + 1]) {
+        ops.push({ op: 'insert', typStart: ti, typEnd: ti + 1 })
+        seenTypo = true
+        ti += 1
+        continue
+      }
 
-    if (ei + 1 < exp.length && typ[ti] === exp[ei + 1]) {
-      ops.push({ op: 'delete', expStart: ei, expEnd: ei + 1 })
-      ei += 1
-      continue
+      if (
+        ei + 1 < exp.length &&
+        typ[ti] === exp[ei + 1] &&
+        exp[ei] !== ' ' &&
+        typ[ti] !== ' '
+      ) {
+        ops.push({ op: 'delete', expStart: ei, expEnd: ei + 1 })
+        ei += 1
+        continue
+      }
     }
 
     ops.push({
@@ -260,6 +254,7 @@ function alignTypedToExpected(exp, typ) {
       typStart: ti,
       typEnd: ti + 1,
     })
+    seenTypo = true
     ei += 1
     ti += 1
   }
@@ -272,13 +267,6 @@ function getExpectedSliceFromNorm(expected, indexMap, normStart, normEnd) {
   const origStart = normStart === 0 ? 0 : indexMap[normStart - 1] + 1
   const origEnd = indexMap[Math.min(normEnd, indexMap.length) - 1] + 1
   return origEnd > origStart ? expected.slice(origStart, origEnd) : ''
-}
-
-function getRawTypedSlice(typed, normToRawStart, normToRawEnd, typStart, typEnd) {
-  if (typStart >= typEnd || !typed) return ''
-  const rawStart = normToRawStart[typStart] ?? 0
-  const rawEnd = normToRawEnd[typEnd - 1] ?? typed.length
-  return typed.slice(rawStart, rawEnd)
 }
 
 function mergeAdjacentSegments(segments) {
@@ -334,9 +322,37 @@ function buildGuideSegments(expected, indexMap, ops, complete, typed) {
   )
 }
 
+function markRawCharStates(typed, normToRawStart, normToRawEnd, ops) {
+  const states = new Array(typed.length)
+  for (const op of ops) {
+    if (op.typStart === undefined || op.typEnd === undefined) continue
+    const rawStart = normToRawStart[op.typStart] ?? 0
+    const rawEnd = normToRawEnd[op.typEnd - 1] ?? typed.length
+    const state = op.op === 'equal' ? 'correct' : 'typo'
+    for (let i = rawStart; i < rawEnd; i += 1) {
+      states[i] = state
+    }
+  }
+  return states
+}
+
+function buildTypedSegmentsFromRaw(typed, states) {
+  if (!typed) return []
+  const segments = []
+  let index = 0
+  while (index < typed.length) {
+    const state = states[index] ?? 'typo'
+    let end = index + 1
+    while (end < typed.length && (states[end] ?? 'typo') === state) {
+      end += 1
+    }
+    segments.push({ text: typed.slice(index, end), state })
+    index = end
+  }
+  return segments
+}
+
 function buildTypedSegmentsFromOps(
-  expected,
-  indexMap,
   typed,
   normToRawStart,
   normToRawEnd,
@@ -346,34 +362,17 @@ function buildTypedSegmentsFromOps(
   if (!typed) return []
 
   if (complete) {
-    return [{ text: expected, state: 'correct' }]
+    return [{ text: typed, state: 'correct' }]
   }
 
-  const segments = []
-
-  for (const op of ops) {
-    if (op.op === 'equal') {
-      segments.push({
-        text: getExpectedSliceFromNorm(expected, indexMap, op.expStart, op.expEnd),
-        state: 'correct',
-      })
-    } else if (op.op === 'replace' || op.op === 'insert') {
-      const typoText = getRawTypedSlice(typed, normToRawStart, normToRawEnd, op.typStart, op.typEnd)
-      if (typoText) {
-        segments.push({ text: typoText, state: 'typo' })
-      }
-    }
-  }
-
-  return mergeAdjacentSegments(
-    segments.length ? segments : [{ text: typed, state: 'typo' }],
-  )
+  const states = markRawCharStates(typed, normToRawStart, normToRawEnd, ops)
+  return buildTypedSegmentsFromRaw(typed, states)
 }
 
 function analyzeTypingCore(expected, typed) {
   const { normalized: exp, indexMap } = getExpectedNormalized(expected)
   const { normalized: typ, normToRawStart, normToRawEnd } = normalizeTypedWithRawMap(typed || '')
-  const complete = exp.length > 0 && exp === normalizeText(typed)
+  const complete = exp.length > 0 && typ === exp
   const ops = alignTypedToExpected(exp, typ)
 
   let matchedChars = 0
@@ -385,7 +384,8 @@ function analyzeTypingCore(expected, typed) {
       matchedChars += op.expEnd - op.expStart
       continue
     }
-    if (!hasTypos) {
+    // Only wrong/extra typed chars are typos — not untyped expected text (delete).
+    if ((op.op === 'insert' || op.op === 'replace') && !hasTypos) {
       hasTypos = true
       mismatchAt = op.expStart ?? op.typStart ?? 0
     }
@@ -429,8 +429,6 @@ export function analyzeTypingState(expected, typed) {
     typed,
   )
   const typedSegments = buildTypedSegmentsFromOps(
-    expected,
-    core.indexMap,
     typed,
     core.normToRawStart,
     core.normToRawEnd,

@@ -23,13 +23,12 @@ const emit = defineEmits(['update:draft', 'complete', 'save'])
 const submitBlockCompletion = inject('submitBlockCompletion', null)
 
 const text = ref('')
-const overlayText = ref('')
 const completing = ref(false)
 const guideRef = ref(null)
+const typedRef = ref(null)
 const inputRef = ref(null)
 let idleTimer = null
 let draftTimer = null
-let overlayRaf = null
 let needsServerSave = false
 
 function emitDraft() {
@@ -49,9 +48,7 @@ function emitSave() {
 
 function restoreDraft() {
   const local = loadDraft(props.bookId, props.blockIndex)
-  const draft = props.initialDraft || local || ''
-  text.value = draft
-  overlayText.value = draft
+  text.value = props.initialDraft || local || ''
   needsServerSave = false
   emitDraft()
 }
@@ -66,7 +63,7 @@ watch(
   { immediate: true },
 )
 
-const typingState = computed(() => analyzeTypingState(props.expectedText, overlayText.value))
+const typingState = computed(() => analyzeTypingState(props.expectedText, text.value))
 const isComplete = computed(() => typingState.value.complete || completing.value)
 const guideSegments = computed(() => typingState.value.guideSegments)
 const typedSegments = computed(() => typingState.value.typedSegments)
@@ -88,8 +85,11 @@ const statusMessage = computed(() => {
 })
 
 function syncInputHeight() {
-  if (guideRef.value && inputRef.value) {
-    inputRef.value.style.height = `${guideRef.value.offsetHeight}px`
+  const guideH = guideRef.value?.offsetHeight ?? 0
+  const typedH = typedRef.value?.offsetHeight ?? 0
+  const height = Math.max(guideH, typedH)
+  if (inputRef.value && height) {
+    inputRef.value.style.height = `${height}px`
   }
 }
 
@@ -109,14 +109,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('mousemove', onMouseMove)
   clearTimeout(idleTimer)
   clearTimeout(draftTimer)
-  if (overlayRaf) {
-    cancelAnimationFrame(overlayRaf)
-  }
   flushDraftSave()
   emitSave()
 })
 
-watch(guideSegments, () => {
+watch([guideSegments, typedSegments], () => {
   requestAnimationFrame(syncInputHeight)
 })
 
@@ -143,21 +140,12 @@ function scheduleDraftSave() {
   draftTimer = setTimeout(flushDraftSave, DRAFT_SAVE_MS)
 }
 
-function scheduleOverlayUpdate() {
-  if (overlayRaf) return
-  overlayRaf = requestAnimationFrame(() => {
-    overlayText.value = text.value
-    overlayRaf = null
-  })
-}
-
 function onInput(event) {
   text.value = event.target.value
   emitDraft()
   needsServerSave = true
   scheduleDraftSave()
   scheduleIdleSave()
-  scheduleOverlayUpdate()
 }
 
 async function autoComplete() {
@@ -220,7 +208,7 @@ watch(
           :class="`typing-overlay__${segment.state}`"
         >{{ segment.text }}</span>
       </div>
-      <div class="typing-overlay__typed" aria-hidden="true">
+      <div ref="typedRef" class="typing-overlay__typed" aria-hidden="true">
         <span
           v-for="(segment, index) in typedSegments"
           :key="`t-${index}`"
@@ -343,18 +331,16 @@ watch(
   position: absolute;
   inset: 0;
   z-index: 1;
+  color: var(--text);
 }
 
 .typing-overlay__correct {
-  color: var(--text);
+  color: inherit;
 }
 
 .typing-overlay__typo {
   color: #fff;
   background: #c62828;
-  border-radius: 2px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
 }
 
 .typing-overlay__input {

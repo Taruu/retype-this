@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import unicodedata
 
 STRESS_MARK = "\u0301"
@@ -29,8 +28,10 @@ def clean_multilingual_text(text: str, char_mappings: dict[str, str] | None = No
 
 
 def normalize_whitespace(text: str, *, trim: bool) -> str:
-    normalized = re.sub(r"[\u00a0\u2000-\u200b\u202f\u205f\u3000]", " ", text)
-    normalized = re.sub(r"\s+", " ", normalized)
+    chars: list[str] = []
+    for ch in text:
+        chars.append(" " if ch.isspace() or ch in "\u00a0\u2000-\u200b\u202f\u205f\u3000" else ch)
+    normalized = "".join(chars)
     return normalized.strip() if trim else normalized
 
 
@@ -55,5 +56,5 @@ def texts_match(
     char_mappings: dict[str, str] | None = None,
 ) -> bool:
     return normalize_typed_text(expected, char_mappings, trim=True) == normalize_typed_text(
-        typed, char_mappings, trim=True
+        typed, char_mappings, trim=False
     )
