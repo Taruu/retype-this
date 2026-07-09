@@ -14,12 +14,19 @@ class Base(DeclarativeBase):
     pass
 
 
+def _prepare_data_dir(data_dir: Path) -> Path:
+    resolved = data_dir.expanduser().resolve()
+    resolved.mkdir(parents=True, exist_ok=True)
+    (resolved / "uploads").mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
 def init_db(data_dir: Path) -> None:
     global _engine, _SessionLocal
-    data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = _prepare_data_dir(data_dir)
     db_path = data_dir / "retype.db"
     _engine = create_engine(
-        f"sqlite:///{db_path}",
+        f"sqlite:///{db_path.as_posix()}",
         connect_args={"check_same_thread": False},
     )
     _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)

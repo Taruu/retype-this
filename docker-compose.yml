@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    image: retype-this:latest
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - retype-data:/app/backend/data
+      # Optional: mount your own config (create it from backend/config.yaml.example first)
+      # - ./backend/config.yaml:/app/backend/config.yaml:ro
+    restart: unless-stopped
+
+volumes:
+  retype-data:
