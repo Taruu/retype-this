@@ -163,6 +163,17 @@ function openBook(book) {
   router.push(`/book/${book.id}/page/${typingPage}`)
 }
 
+function bookProgress(book) {
+  const finished = book.progress?.typing_block_index ?? 0
+  const total = book.block_count || 0
+  return {
+    finished,
+    total,
+    percent: total > 0 ? Math.round((finished / total) * 100) : 0,
+    isComplete: total > 0 && finished >= total,
+  }
+}
+
 function logout() {
   auth.logout()
   router.push('/login')
@@ -204,21 +215,78 @@ function logout() {
         :class="{ 'library-book--selected': index === selectedIndex }"
         @click="selectBook(index)"
       >
-        <div style="display: flex; justify-content: space-between; gap: 1rem; align-items: start;">
-          <div>
-            <h2 style="margin: 0 0 0.25rem;">{{ book.title }}</h2>
-            <p class="muted" style="margin: 0;">
-              {{ book.author || 'Unknown author' }} · {{ book.format.toUpperCase() }} ·
-              {{ book.block_count }} blocks
-            </p>
-            <p v-if="book.progress" class="muted" style="margin: 0.5rem 0 0;">
-              Page {{ book.progress.reading_page + 1 }} · Block {{ book.progress.typing_block_index + 1 }}
-            </p>
+        <div class="library-book__content">
+          <h2 class="library-book__title">{{ book.title }}</h2>
+          <p class="muted library-book__meta">
+            {{ book.author || 'Unknown author' }} · {{ book.format.toUpperCase() }} ·
+            {{ book.block_count }} blocks
+          </p>
+
+          <div v-if="book.block_count" class="library-book__progress">
+            <div class="library-book__progress-track" aria-hidden="true">
+              <div
+                class="library-book__progress-bar"
+                :class="{ 'library-book__progress-bar--complete': bookProgress(book).isComplete }"
+                :style="{ width: `${bookProgress(book).percent}%` }"
+              />
+            </div>
+            <span class="muted library-book__progress-label">
+              <template v-if="bookProgress(book).isComplete">Complete</template>
+              <template v-else>
+                {{ bookProgress(book).finished }} / {{ bookProgress(book).total }} blocks
+                ({{ bookProgress(book).percent }}%)
+              </template>
+            </span>
           </div>
+
           <div class="library-book__actions">
-            <button class="btn" type="button" @click.stop="openBook(book)">Continue</button>
-            <button class="btn btn-secondary btn-sm" type="button" @click.stop="renameBook(book)">Rename</button>
-            <button class="btn btn-secondary btn-sm" type="button" @click.stop="removeBook(book.id)">Delete</button>
+            <div class="library-action">
+              <button
+                class="library-action__btn"
+                type="button"
+                aria-label="Continue"
+                aria-keyshortcuts="Enter"
+                @click.stop="openBook(book)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">Enter</kbd>
+            </div>
+            <div class="library-action">
+              <button
+                class="library-action__btn"
+                type="button"
+                aria-label="Rename"
+                aria-keyshortcuts="R"
+                @click.stop="renameBook(book)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">R</kbd>
+            </div>
+            <div class="library-action">
+              <button
+                class="library-action__btn library-action__btn--danger"
+                type="button"
+                aria-label="Delete"
+                aria-keyshortcuts="Delete"
+                @click.stop="removeBook(book.id)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4h8v2" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">Del</kbd>
+            </div>
           </div>
         </div>
       </article>
@@ -248,16 +316,94 @@ function logout() {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
-.library-book__actions {
+.library-book__content {
   display: flex;
+  flex-direction: column;
   gap: 0.5rem;
-  flex-wrap: wrap;
-  align-items: center;
 }
 
-.btn-sm {
-  padding: 0.35rem 0.6rem;
+.library-book__title {
+  margin: 0;
+}
+
+.library-book__meta {
+  margin: 0;
+}
+
+.library-book__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.library-book__progress-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.library-book__progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.library-book__progress-bar--complete {
+  background: var(--success);
+}
+
+.library-book__progress-label {
   font-size: 0.8rem;
-  border-radius: 8px;
+}
+
+.library-book__actions {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.25rem;
+}
+
+.library-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.library-action__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.library-action__btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.library-action__btn--danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.library-action__key {
+  font-family: inherit;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
 }
 </style>
