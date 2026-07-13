@@ -264,3 +264,20 @@ def complete_block(
     db.commit()
     db.refresh(progress)
     return _progress_out(progress)
+
+
+@router.post("/{book_id}/reset-progress", response_model=ProgressOut)
+def reset_progress(
+    book_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
+) -> ProgressOut:
+    book = _get_book_or_404(db, book_id)
+    progress = get_progress_or_create(db, book)
+    progress.reading_page = 0
+    progress.typing_block_index = 0
+    progress.char_offset = 0
+    progress.draft_text = ""
+    db.commit()
+    db.refresh(progress)
+    return _progress_out(progress)

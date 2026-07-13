@@ -88,6 +88,9 @@ export const api = {
       body: JSON.stringify({ typed_text: typedText }),
     })
   },
+  resetProgress(id) {
+    return request(`/api/books/${id}/reset-progress`, { method: 'POST' })
+  },
   renameBook(id, title) {
     return request(`/api/books/${id}`, {
       method: 'PATCH',

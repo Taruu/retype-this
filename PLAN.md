@@ -1,4 +1,4 @@
-# Retype Book — MVP Plan
+# retype-this — MVP Plan
 
 Self-hosted web app: upload FB2/EPUB, server splits into blocks, Vue3 client for retyping while reading. Learn touch typing via sensorimotor memory.
 

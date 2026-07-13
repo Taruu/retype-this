@@ -286,7 +286,7 @@ watch(
 }
 
 .typing-overlay--error {
-  border-color: #e57373;
+  border-color: var(--error-border);
 }
 
 .typing-overlay__progress {
@@ -317,7 +317,7 @@ watch(
 }
 
 .typing-overlay__status--warn {
-  color: #c62828;
+  color: var(--danger);
 }
 
 .typing-overlay__wrap {
@@ -415,8 +415,8 @@ watch(
 }
 
 .typing-overlay__hint {
-  color: #fff;
-  background: #ef6c00;
+  color: var(--hint-text);
+  background: var(--hint);
 }
 
 .typing-overlay__hint--float {
@@ -439,8 +439,8 @@ watch(
 }
 
 .typing-overlay__typo {
-  color: #fff;
-  background: #c62828;
+  color: var(--typo-text);
+  background: var(--typo);
 }
 
 .typing-overlay__input {

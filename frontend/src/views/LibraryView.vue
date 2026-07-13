@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import ThemeToggle from '../components/ThemeToggle.vue'
 import { useAuthStore } from '../stores/auth'
 import { useBooksStore } from '../stores/books'
 import { useSettingsStore } from '../stores/settings'
@@ -99,6 +100,12 @@ function onKeydown(event) {
     return
   }
 
+  if (event.key.toLowerCase() === 'd' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault()
+    resetProgress(book)
+    return
+  }
+
   if (
     (event.key === 'Delete' || event.key === 'Backspace') &&
     !event.ctrlKey &&
@@ -156,6 +163,15 @@ async function removeBook(id) {
   await booksStore.deleteBook(id)
 }
 
+async function resetProgress(book) {
+  if (!confirm(`Reset progress for "${book.title}"? You will start from the beginning.`)) return
+  try {
+    await booksStore.resetBookProgress(book.id)
+  } catch {
+    // error shown in store
+  }
+}
+
 function openBook(book) {
   const pageSize = book.page_size ?? 4
   const typingIndex = book.progress?.typing_block_index ?? 0
@@ -187,7 +203,8 @@ function logout() {
         <h1 style="margin: 0;">Library</h1>
         <p class="muted" style="margin: 0.25rem 0 0;">Upload EPUB or FB2 files and retype them page by page.</p>
       </div>
-      <div style="display: flex; gap: 0.75rem;">
+      <div style="display: flex; gap: 0.75rem; align-items: center;">
+        <ThemeToggle />
         <button class="btn" type="button" :disabled="booksStore.uploadLoading" @click="openUpload">
           {{ booksStore.uploadLoading ? 'Uploading…' : 'Upload book' }}
         </button>
@@ -199,7 +216,7 @@ function logout() {
     <p v-if="booksStore.error" class="error">{{ booksStore.error }}</p>
     <p v-if="booksStore.loading" class="muted">Loading books…</p>
     <p v-else-if="booksStore.books.length" class="muted library-shortcuts">
-      ↑↓ select book · Enter continue · R rename · Delete remove · Esc logout
+      ↑↓ select book · Enter continue · R rename · D reset · Delete remove · Esc logout
     </p>
 
     <section v-if="!booksStore.loading && booksStore.books.length === 0" class="card" style="padding: 2rem;">
@@ -268,6 +285,21 @@ function logout() {
                 </svg>
               </button>
               <kbd class="library-action__key">R</kbd>
+            </div>
+            <div class="library-action">
+              <button
+                class="library-action__btn library-action__btn--reset"
+                type="button"
+                aria-label="Reset progress"
+                aria-keyshortcuts="D"
+                @click.stop="resetProgress(book)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">D</kbd>
             </div>
             <div class="library-action">
               <button
@@ -394,6 +426,11 @@ function logout() {
 .library-action__btn--danger:hover {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+.library-action__btn--reset:hover {
+  border-color: var(--hint);
+  color: var(--hint);
 }
 
 .library-action__key {

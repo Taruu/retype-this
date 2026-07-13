@@ -508,3 +508,17 @@ export function saveDraft(bookId, blockIndex, text) {
 export function clearDraft(bookId, blockIndex) {
   saveDraft(bookId, blockIndex, '')
 }
+
+export function clearAllDraftsForBook(bookId) {
+  try {
+    const prefix = `retype-draft:${bookId}:`
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i)
+      if (key?.startsWith(prefix)) {
+        localStorage.removeItem(key)
+      }
+    }
+  } catch {
+    // ignore quota errors
+  }
+}

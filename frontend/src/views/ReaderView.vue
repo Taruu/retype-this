@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BlockReader from '../components/BlockReader.vue'
+import ThemeToggle from '../components/ThemeToggle.vue'
 import { useReaderStore } from '../stores/reader'
 import { useSettingsStore } from '../stores/settings'
 import { compareTypedText } from '../utils/textMatch'
@@ -270,6 +271,7 @@ function backToLibrary() {
         <p class="muted reader-hints">Enter — next page when finished · Esc — library</p>
       </div>
       <div class="reader-nav">
+        <ThemeToggle />
         <div class="reader-nav__group">
           <span class="reader-nav__hint muted">Page Up</span>
           <button class="btn btn-secondary" type="button" :disabled="reader.currentPage <= 0" @click="goToPage(reader.currentPage - 1)">

@@ -1,20 +1,48 @@
 :root {
-  color-scheme: light dark;
-  --bg: #f4f1ea;
-  --surface: #fffdf8;
-  --text: #1f1a14;
-  --muted: #6b6258;
-  --accent: #2f6fed;
-  --accent-soft: #dce8ff;
-  --border: #ddd4c6;
-  --success: #1f7a4d;
+  color-scheme: light;
+  --bg: #f7f0e4;
+  --surface: #fffcf5;
+  --text: #2a2118;
+  --muted: #7a6f62;
+  --accent: #c45c26;
+  --accent-soft: #fde8d4;
+  --border: #e5d9c8;
+  --success: #2d6a4f;
   --danger: #b42318;
-  --locked: #9a9084;
+  --locked: #a39484;
+  --hint: #d97706;
+  --hint-text: #fff;
+  --typo: #b42318;
+  --typo-text: #fff;
+  --error-border: #e07a5f;
   --font-typing: "Cutive Mono", "Courier New", Courier, "Liberation Mono", monospace;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --body-gradient-start: #fff5e8;
+  --shadow: rgba(42, 33, 24, 0.07);
+  font-family: "Segoe UI", system-ui, sans-serif;
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #1a1510;
+  --surface: #252019;
+  --text: #f0e8dc;
+  --muted: #a89a8a;
+  --accent: #e07b3a;
+  --accent-soft: #3d2a1a;
+  --border: #3d3428;
+  --success: #5cb88a;
+  --danger: #f07067;
+  --locked: #7a6f5e;
+  --hint: #f59e0b;
+  --hint-text: #1a1510;
+  --typo: #ef5350;
+  --typo-text: #1a1510;
+  --error-border: #c45c4a;
+  --body-gradient-start: #2a2118;
+  --shadow: rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -24,7 +52,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at top, #fff9ef 0%, var(--bg) 55%);
+  background: radial-gradient(circle at top, var(--body-gradient-start) 0%, var(--bg) 55%);
 }
 
 a {
@@ -50,7 +78,7 @@ button {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
-  box-shadow: 0 12px 40px rgba(31, 26, 20, 0.06);
+  box-shadow: 0 12px 40px var(--shadow);
 }
 
 .btn {
