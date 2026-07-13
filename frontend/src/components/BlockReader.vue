@@ -6,6 +6,7 @@ defineProps({
   status: { type: String, required: true },
   bookId: { type: Number, required: true },
   initialDraft: { type: String, default: '' },
+  isLastBlock: { type: Boolean, default: false },
 })
 
 defineEmits(['update:draft', 'complete', 'save'])
@@ -29,6 +30,7 @@ defineEmits(['update:draft', 'complete', 'save'])
     :block-index="block.index"
     :expected-text="block.text_plain"
     :initial-draft="initialDraft"
+    :is-last-block="isLastBlock"
     @update:draft="$emit('update:draft', $event)"
     @complete="$emit('complete', $event)"
     @save="$emit('save', $event)"

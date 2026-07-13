@@ -17,6 +17,7 @@ const props = defineProps({
   blockIndex: { type: Number, required: true },
   expectedText: { type: String, required: true },
   initialDraft: { type: String, default: '' },
+  isLastBlock: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:draft', 'complete', 'save'])
@@ -77,7 +78,7 @@ const statusMessage = computed(() => {
     return 'Type over the text exactly — one character at a time.'
   }
   if (isComplete.value) {
-    return '✓ Match — moving to next block…'
+    return props.isLastBlock ? '✓ Match — finishing the book…' : '✓ Match — moving to next block…'
   }
   if (hasTypos.value) {
     return 'Move the cursor near a red mistake to see the orange correction.'

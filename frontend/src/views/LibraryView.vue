@@ -248,8 +248,13 @@ async function resetProgress(book) {
 function openBook(book) {
   const pageSize = book.page_size ?? 4
   const typingIndex = book.progress?.typing_block_index ?? 0
-  const typingPage = Math.floor(typingIndex / pageSize)
-  router.push(`/book/${book.id}/page/${typingPage}`)
+  const total = book.block_count || 0
+  const pageCount = total > 0 ? Math.ceil(total / pageSize) : 1
+  const isComplete = total > 0 && typingIndex >= total
+  const page = isComplete
+    ? Math.min(book.progress?.reading_page ?? 0, Math.max(0, pageCount - 1))
+    : Math.floor(typingIndex / pageSize)
+  router.push(`/book/${book.id}/page/${page}`)
 }
 
 function bookProgress(book) {
@@ -345,7 +350,7 @@ function logout() {
               <button
                 class="library-action__btn"
                 type="button"
-                aria-label="Continue"
+                :aria-label="bookProgress(book).isComplete ? 'Read' : 'Continue'"
                 aria-keyshortcuts="Enter"
                 @click.stop="openBook(book)"
               >

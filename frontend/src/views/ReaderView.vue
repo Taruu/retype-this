@@ -19,6 +19,7 @@ const settings = useSettingsStore()
 const pageError = ref('')
 const activeBlockRef = ref(null)
 const hasScrolledInitially = ref(false)
+const justFinishedBook = ref(false)
 
 const saveStatusLabel = computed(() => {
   switch (reader.saveStatus) {
@@ -64,6 +65,7 @@ const activeBlockComplete = computed(() => {
 })
 
 const isPageTypingComplete = computed(() => {
+  if (reader.isBookComplete) return true
   if (!reader.pageData) return false
   const lastBlockOnPage = Math.max(...reader.pageData.blocks.map((block) => block.index))
   return reader.progress.typing_block_index > lastBlockOnPage
@@ -76,6 +78,7 @@ const canGoNextPage = computed(() => {
 /** Client-side only: hide paragraphs after the current typing block. */
 const visibleBlocks = computed(() => {
   if (!reader.pageData) return []
+  if (reader.isBookComplete) return reader.pageData.blocks
   const currentIndex = reader.progress.typing_block_index
   return reader.pageData.blocks.filter((block) => block.index <= currentIndex)
 })
@@ -85,6 +88,7 @@ async function bootstrap() {
   reader.reset()
   pageError.value = ''
   hasScrolledInitially.value = false
+  justFinishedBook.value = false
   try {
     await reader.loadBook(props.id, props.page)
     if (route.name === 'book-redirect') {
@@ -122,7 +126,7 @@ async function goToPage(nextPage) {
   if (nextPage < 0 || nextPage >= reader.pageCount) return
 
   const goingForward = nextPage > reader.currentPage
-  if (goingForward) {
+  if (goingForward && !reader.isBookComplete) {
     if (nextPage > reader.maxUnlockedPage) {
       pageError.value = 'Finish the current typing block before reading further.'
       return
@@ -175,8 +179,14 @@ function onKeydown(event) {
 
 async function onComplete(typedText) {
   pageError.value = ''
+  const wasLastBlock = reader.book?.block_count
+    ? reader.progress.typing_block_index === reader.book.block_count - 1
+    : false
   try {
     await reader.completeCurrentBlock(typedText)
+    if (wasLastBlock || reader.isBookComplete) {
+      justFinishedBook.value = true
+    }
     return true
   } catch (error) {
     pageError.value = error.message || 'Could not complete block'
@@ -230,7 +240,7 @@ function scrollActiveBlockIntoView(behavior = 'smooth') {
 watch(
   () => [reader.loading, reader.pageData, reader.progress.typing_block_index],
   ([loading, pageData]) => {
-    if (!loading && pageData && activeBlock.value) {
+    if (!loading && pageData && activeBlock.value && !reader.isBookComplete) {
       scrollActiveBlockIntoView(hasScrolledInitially.value ? 'smooth' : 'instant')
       hasScrolledInitially.value = true
     }
@@ -251,7 +261,12 @@ function backToLibrary() {
         <p class="muted reader-meta">
           <span>
             Page {{ reader.currentPage + 1 }} / {{ reader.pageCount || '…' }} ·
-            Block {{ reader.progress.typing_block_index + 1 }} / {{ reader.book?.block_count || '…' }}
+            <template v-if="reader.isBookComplete">
+              Complete · {{ reader.book?.block_count || '…' }} blocks
+            </template>
+            <template v-else>
+              Block {{ reader.progress.typing_block_index + 1 }} / {{ reader.book?.block_count || '…' }}
+            </template>
           </span>
           <span
             class="reader-save"
@@ -268,7 +283,8 @@ function backToLibrary() {
             <span class="reader-save__label">{{ saveStatusLabel }}</span>
           </span>
         </p>
-        <p class="muted reader-hints">Enter — next page when finished · Esc — library</p>
+        <p v-if="!reader.isBookComplete" class="muted reader-hints">Enter — next page when finished · Esc — library</p>
+        <p v-else class="muted reader-hints">Browse freely · Esc — library</p>
       </div>
       <div class="reader-nav">
         <ThemeToggle />
@@ -297,8 +313,15 @@ function backToLibrary() {
     <p v-else-if="reader.error" class="error">{{ reader.error }}</p>
 
     <template v-else-if="reader.pageData">
+      <p v-if="justFinishedBook" class="card reader-finished reader-finished--celebrate">
+        You've finished the book — all blocks typed.
+      </p>
+      <p v-else-if="reader.isBookComplete" class="card reader-finished">
+        This book is complete. Browse pages freely or reset progress from the library.
+      </p>
+
       <p
-        v-if="!activeBlock && typingBlockPage <= reader.maxUnlockedPage"
+        v-else-if="!activeBlock && typingBlockPage <= reader.maxUnlockedPage"
         class="card reader-jump"
       >
         Current typing block is on page {{ typingBlockPage + 1 }}.
@@ -321,6 +344,7 @@ function backToLibrary() {
               :block="block"
               :status="reader.blockStatus(block.index)"
               :initial-draft="block.index === reader.progress.typing_block_index ? reader.progress.draft_text : ''"
+              :is-last-block="!reader.isBookComplete && block.index === (reader.book?.block_count ?? 0) - 1"
               @update:draft="onDraft"
               @complete="onComplete"
               @save="onSave"
@@ -454,6 +478,19 @@ function backToLibrary() {
   margin-bottom: 0.75rem;
   width: min(56rem, calc(100% - 2rem));
   margin-inline: auto;
+}
+
+.reader-finished {
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  width: min(56rem, calc(100% - 2rem));
+  margin-inline: auto;
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.reader-finished--celebrate {
+  font-weight: 600;
 }
 
 .reader-scroll {

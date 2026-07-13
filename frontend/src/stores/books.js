@@ -68,5 +68,11 @@ export const useBooksStore = defineStore('books', {
         throw error
       }
     },
+    syncBookProgress(id, progress) {
+      const index = this.books.findIndex((item) => item.id === id)
+      if (index >= 0) {
+        this.books[index] = { ...this.books[index], progress }
+      }
+    },
   },
 })
