@@ -20,6 +20,7 @@ class ParsedBlock:
 def _normalize_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in text.split("\n")]
+    lines = [line for line in lines if line]
     return "\n".join(lines).strip()
 
 
@@ -70,12 +71,25 @@ def _heading_block(element, tag: str) -> ParsedBlock | None:
     return ParsedBlock(kind="heading", html=html, text_plain=text)
 
 
+def _verse_html(text: str) -> str:
+    lines = text.split("\n")
+    inner = "<br />\n".join(lines)
+    return f'<div class="line-block">{inner}</div>'
+
+
+def _verse_block(element) -> ParsedBlock | None:
+    text = _normalize_text(_element_plain_text(element))
+    if not text:
+        return None
+    return ParsedBlock(kind="verse", html=_verse_html(text), text_plain=text)
+
+
 def split_html_to_blocks(html: str) -> list[ParsedBlock]:
     soup = BeautifulSoup(html, "html.parser")
     body = soup.body or soup
     blocks: list[ParsedBlock] = []
 
-    for element in body.find_all(["h1", "h2", "h3", "p", "blockquote"]):
+    for element in body.select("h1, h2, h3, p, blockquote, div.line-block"):
         parent_tags = {parent.name for parent in element.parents if getattr(parent, "name", None)}
         if parent_tags & {"p", "blockquote", "h1", "h2", "h3", "li", "td"}:
             continue
@@ -95,6 +109,10 @@ def split_html_to_blocks(html: str) -> list[ParsedBlock]:
                         text_plain=text,
                     )
                 )
+        elif element.name == "div":
+            block = _verse_block(element)
+            if block:
+                blocks.append(block)
 
     if not blocks:
         text = _normalize_text(body.get_text(" ", strip=True))
