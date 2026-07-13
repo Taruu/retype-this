@@ -13,6 +13,9 @@ const router = useRouter()
 const fileInput = ref(null)
 const bookListRef = ref(null)
 const selectedIndex = ref(-1)
+const dragDepth = ref(0)
+
+const isDragOver = computed(() => dragDepth.value > 0)
 
 const selectedBook = computed(() => {
   const books = booksStore.books
@@ -121,11 +124,70 @@ onMounted(async () => {
   await settings.load()
   booksStore.fetchBooks()
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('dragover', preventWindowFileDrop)
+  window.addEventListener('drop', preventWindowFileDrop)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('dragover', preventWindowFileDrop)
+  window.removeEventListener('drop', preventWindowFileDrop)
 })
+
+function preventWindowFileDrop(event) {
+  event.preventDefault()
+  if (event.type === 'drop') {
+    dragDepth.value = 0
+  }
+}
+
+function isAcceptedBookFile(file) {
+  const name = file?.name?.toLowerCase() || ''
+  return name.endsWith('.epub') || name.endsWith('.fb2')
+}
+
+function pickBookFile(fileList) {
+  if (!fileList?.length) return null
+  return Array.from(fileList).find(isAcceptedBookFile) || null
+}
+
+function hasDraggedFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes('Files')
+}
+
+function onDragEnter(event) {
+  if (!hasDraggedFiles(event) || booksStore.uploadLoading) return
+  event.preventDefault()
+  dragDepth.value += 1
+}
+
+function onDragLeave(event) {
+  if (!hasDraggedFiles(event)) return
+  event.preventDefault()
+  dragDepth.value = Math.max(0, dragDepth.value - 1)
+}
+
+function onDragOver(event) {
+  if (!hasDraggedFiles(event) || booksStore.uploadLoading) return
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+async function onDrop(event) {
+  if (!hasDraggedFiles(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  dragDepth.value = 0
+
+  const file = pickBookFile(event.dataTransfer?.files)
+  if (!file) {
+    booksStore.error = 'Only EPUB and FB2 files are supported.'
+    return
+  }
+  await handleUploadFile(file)
+}
 
 function openUpload() {
   fileInput.value?.click()
@@ -141,9 +203,13 @@ async function renameBook(book) {
   }
 }
 
-async function onFileChange(event) {
-  const file = event.target.files?.[0]
+async function handleUploadFile(file) {
   if (!file) return
+  if (!isAcceptedBookFile(file)) {
+    booksStore.error = 'Only EPUB and FB2 files are supported.'
+    return
+  }
+  if (booksStore.uploadLoading) return
   try {
     const book = await booksStore.uploadBook(file)
     const title = window.prompt('Name this book', book.title)
@@ -153,6 +219,13 @@ async function onFileChange(event) {
     router.push(`/book/${book.id}`)
   } catch {
     // error shown in store
+  }
+}
+
+async function onFileChange(event) {
+  const file = event.target.files?.[0]
+  try {
+    await handleUploadFile(file)
   } finally {
     event.target.value = ''
   }
@@ -197,11 +270,22 @@ function logout() {
 </script>
 
 <template>
-  <main class="container" style="padding: 2rem 0 4rem;">
+  <main
+    class="container library-page"
+    :class="{ 'library-page--dragover': isDragOver }"
+    @dragenter="onDragEnter"
+    @dragleave="onDragLeave"
+    @dragover="onDragOver"
+    @drop="onDrop"
+  >
+    <div v-if="isDragOver" class="library-drop-overlay" aria-hidden="true">
+      <p class="library-drop-overlay__text">Drop EPUB or FB2 to upload</p>
+    </div>
+
     <header style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 2rem;">
       <div>
         <h1 style="margin: 0;">Library</h1>
-        <p class="muted" style="margin: 0.25rem 0 0;">Upload EPUB or FB2 files and retype them page by page.</p>
+        <p class="muted" style="margin: 0.25rem 0 0;">Upload or drop EPUB or FB2 files and retype them page by page.</p>
       </div>
       <div style="display: flex; gap: 0.75rem; align-items: center;">
         <ThemeToggle />
@@ -219,9 +303,9 @@ function logout() {
       ↑↓ select book · Enter continue · R rename · D reset · Delete remove · Esc logout
     </p>
 
-    <section v-if="!booksStore.loading && booksStore.books.length === 0" class="card" style="padding: 2rem;">
+    <section v-if="!booksStore.loading && booksStore.books.length === 0" class="card library-empty" style="padding: 2rem;">
       <h2 style="margin-top: 0;">No books yet</h2>
-      <p class="muted">Upload an EPUB or FB2 file to start retyping.</p>
+      <p class="muted">Upload or drag and drop an EPUB or FB2 file to start retyping.</p>
     </section>
 
     <section v-else ref="bookListRef" class="library-list">
@@ -327,6 +411,39 @@ function logout() {
 </template>
 
 <style scoped>
+.library-page {
+  position: relative;
+  padding: 2rem 0 4rem;
+}
+
+.library-page--dragover {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 8px;
+  border-radius: 16px;
+}
+
+.library-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent-soft) 82%, transparent);
+  pointer-events: none;
+}
+
+.library-drop-overlay__text {
+  margin: 0;
+  padding: 1rem 1.5rem;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .library-shortcuts {
   margin: 0 0 1rem;
   font-size: 0.85rem;
