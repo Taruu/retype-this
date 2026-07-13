@@ -9,6 +9,8 @@ server:
 typing:
   # Map book punctuation to what you type on your keyboard.
   # Stress marks (U+0301) are stripped automatically during normalization.
+  # Order matters: punctuation mappings are always applied before whitespace
+  # sources such as "\xa0" (non-breaking space).
   char_mappings:
     "«": '"'
     "»": '"'

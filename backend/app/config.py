@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from app.services.text_normalizer import order_char_mappings
+
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 DEFAULT_CHAR_MAPPINGS: dict[str, str] = {
@@ -82,5 +84,7 @@ def load_config(path: Path | None = None) -> AppConfig:
             secret_key=raw["server"]["secret_key"],
             data_dir=data_dir,
         ),
-        typing=TypingConfig(char_mappings={str(k): str(v) for k, v in char_mappings.items()}),
+        typing=TypingConfig(
+            char_mappings=order_char_mappings({str(k): str(v) for k, v in char_mappings.items()}),
+        ),
     )

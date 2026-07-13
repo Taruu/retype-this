@@ -18,7 +18,15 @@ class ParsedBlock:
 
 
 def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in text.split("\n")]
+    return "\n".join(lines).strip()
+
+
+def _element_plain_text(element) -> str:
+    for br in element.find_all("br"):
+        br.replace_with("\n")
+    return element.get_text("", strip=False)
 
 
 def _split_long_text(text: str) -> list[str]:
@@ -43,7 +51,7 @@ def _split_long_text(text: str) -> list[str]:
 
 
 def _paragraph_blocks(element) -> list[ParsedBlock]:
-    text = _normalize_text(element.get_text(" ", strip=True))
+    text = _normalize_text(_element_plain_text(element))
     if not text:
         return []
     chunks = _split_long_text(text)
@@ -55,7 +63,7 @@ def _paragraph_blocks(element) -> list[ParsedBlock]:
 
 
 def _heading_block(element, tag: str) -> ParsedBlock | None:
-    text = _normalize_text(element.get_text(" ", strip=True))
+    text = _normalize_text(_element_plain_text(element))
     if not text:
         return None
     html = f"<{tag}>{text}</{tag}>"
@@ -78,7 +86,7 @@ def split_html_to_blocks(html: str) -> list[ParsedBlock]:
         elif element.name == "p":
             blocks.extend(_paragraph_blocks(element))
         elif element.name == "blockquote":
-            text = _normalize_text(element.get_text(" ", strip=True))
+            text = _normalize_text(_element_plain_text(element))
             if text:
                 blocks.append(
                     ParsedBlock(

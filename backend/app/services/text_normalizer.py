@@ -5,6 +5,36 @@ import unicodedata
 STRESS_MARK = "\u0301"
 
 
+def is_unicode_space_char(ch: str) -> bool:
+    """True for Unicode whitespace except line breaks."""
+    if not ch:
+        return False
+    if ch in "\n\r":
+        return False
+    if ch.isspace():
+        return True
+    cp = ord(ch)
+    return cp == 0x00A0 or 0x2000 <= cp <= 0x200B or cp in (0x202F, 0x205F, 0x3000)
+
+
+def order_char_mappings(mappings: dict[str, str]) -> dict[str, str]:
+    """Apply punctuation mappings before whitespace source chars (e.g. \\xa0)."""
+    if not mappings:
+        return {}
+
+    whitespace_items: list[tuple[str, str]] = []
+    punctuation_items: list[tuple[str, str]] = []
+    for src, dst in mappings.items():
+        if len(src) == 1 and is_unicode_space_char(src):
+            whitespace_items.append((src, dst))
+        else:
+            punctuation_items.append((src, dst))
+
+    punctuation_items.sort(key=lambda item: (-len(item[0]), item[0]))
+    whitespace_items.sort(key=lambda item: item[0])
+    return dict(punctuation_items + whitespace_items)
+
+
 def apply_char_mappings(text: str, mappings: dict[str, str]) -> str:
     if not mappings:
         return text
@@ -18,7 +48,7 @@ def clean_multilingual_text(text: str, char_mappings: dict[str, str] | None = No
     if not text:
         return ""
 
-    mappings = char_mappings or {}
+    mappings = order_char_mappings(char_mappings or {})
     for original, replacement in mappings.items():
         text = text.replace(original, replacement)
 
@@ -30,9 +60,17 @@ def clean_multilingual_text(text: str, char_mappings: dict[str, str] | None = No
 def normalize_whitespace(text: str, *, trim: bool) -> str:
     chars: list[str] = []
     for ch in text:
-        chars.append(" " if ch.isspace() or ch in "\u00a0\u2000-\u200b\u202f\u205f\u3000" else ch)
+        if ch in "\n\r":
+            chars.append("\n")
+        elif is_unicode_space_char(ch):
+            chars.append(" ")
+        else:
+            chars.append(ch)
     normalized = "".join(chars)
-    return normalized.strip() if trim else normalized
+    if not trim:
+        return normalized
+    lines = [line.strip() for line in normalized.split("\n")]
+    return "\n".join(lines).strip("\n")
 
 
 def normalize_typed_text(
