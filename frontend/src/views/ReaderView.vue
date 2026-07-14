@@ -230,6 +230,14 @@ function onDraft({ blockIndex, text }) {
     if (text !== reader.progress.draft_text) {
       reader.markDraftDirty()
     }
+    // After guide/typed height updates, feed the viewport like a typewriter.
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          scrollTypingMachineFollow()
+        })
+      })
+    })
   }
 }
 
@@ -251,10 +259,45 @@ function getScrollEl() {
   return readerScrollRef.value || activeBlockRef.value?.closest('.reader-scroll') || null
 }
 
+/** Element Y relative to the scroll container’s content. */
+function offsetTopInScroll(el, scrollEl) {
+  const elRect = el.getBoundingClientRect()
+  const scrollRect = scrollEl.getBoundingClientRect()
+  return elRect.top - scrollRect.top + scrollEl.scrollTop
+}
+
+/**
+ * Typewriter metrics from the typing overlay: one line + pad so the caret
+ * stays in view as wrapped text grows.
+ */
+function getTypewriterMetrics(blockEl) {
+  const wrap = blockEl?.querySelector('.typing-overlay__wrap')
+  const guide = blockEl?.querySelector('.typing-overlay__guide')
+  const style = wrap ? getComputedStyle(wrap) : null
+  const guideStyle = guide ? getComputedStyle(guide) : style
+  const fontSize = style ? parseFloat(style.fontSize) || 16.8 : 16.8
+  let lineHeight = fontSize * 1.65
+  if (style?.lineHeight && style.lineHeight !== 'normal') {
+    const parsed = parseFloat(style.lineHeight)
+    if (!Number.isNaN(parsed)) lineHeight = parsed
+  }
+  const padY = guideStyle ? parseFloat(guideStyle.paddingTop) || fontSize * 0.6 : fontSize * 0.6
+  // Extra room under the caret (~½ line) so wrapped text isn’t flush to the edge.
+  const fitPad = padY + lineHeight * 0.5
+  return { fontSize, lineHeight, fitPad, step: lineHeight + fitPad }
+}
+
+/** Top inset so block start sits below the fade, not under the header edge. */
+function blockStartInset(scrollEl) {
+  return Math.max(40, Math.min(96, scrollEl.clientHeight * 0.1))
+}
+
 /** Fast ease-out scroll — quicker than browser smooth, still soft at the end. */
 function animateScrollTo(scrollEl, targetTop, durationMs = 260) {
+  const maxTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+  const clamped = Math.max(0, Math.min(maxTop, targetTop))
   const start = scrollEl.scrollTop
-  const delta = targetTop - start
+  const delta = clamped - start
   if (Math.abs(delta) < 1) return Promise.resolve()
 
   const startTime = performance.now()
@@ -271,7 +314,61 @@ function animateScrollTo(scrollEl, targetTop, durationMs = 260) {
   })
 }
 
-/** Wait for blocks to mount and layout height to settle, then scroll to bottom. */
+/**
+ * Pin the active block’s start near the top of the viewport.
+ * If the block already has typed text, also pull far enough that the caret fits.
+ */
+function scrollToBlockStart(scrollEl, block, behavior = 'smooth') {
+  const inset = blockStartInset(scrollEl)
+  let targetTop = Math.max(0, offsetTopInScroll(block, scrollEl) - inset)
+
+  const field = block.querySelector('.typing-overlay__field') || block.querySelector('.typing-overlay__guide')
+  if (field) {
+    const { fitPad, lineHeight } = getTypewriterMetrics(block)
+    const fieldBottom = offsetTopInScroll(field, scrollEl) + field.offsetHeight
+    const needBottom = fieldBottom + fitPad + lineHeight
+    const minTopForCaret = needBottom - scrollEl.clientHeight
+    if (minTopForCaret > targetTop) targetTop = minTopForCaret
+  }
+
+  const maxTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+  targetTop = Math.max(0, Math.min(maxTop, targetTop))
+
+  if (behavior === 'auto' || behavior === 'instant') {
+    scrollEl.scrollTop = targetTop
+    return Promise.resolve()
+  }
+  return animateScrollTo(scrollEl, targetTop, 260)
+}
+
+/**
+ * Typewriter follow: when typed text grows past the viewport, scroll down by
+ * roughly one line + padding so the new lines stay visible.
+ */
+function scrollTypingMachineFollow() {
+  const scrollEl = getScrollEl()
+  const block = activeBlockRef.value
+  if (!scrollEl || !block) return
+
+  const field = block.querySelector('.typing-overlay__field') || block.querySelector('.typing-overlay__guide')
+  if (!field) return
+
+  const { fitPad, lineHeight } = getTypewriterMetrics(block)
+  const fieldBottom = offsetTopInScroll(field, scrollEl) + field.offsetHeight
+  const visibleBottom = scrollEl.scrollTop + scrollEl.clientHeight
+  const needBottom = fieldBottom + fitPad
+
+  if (needBottom <= visibleBottom) return
+
+  // Advance just enough for the overflow (typewriter paper feed).
+  const overflow = needBottom - visibleBottom
+  const step = lineHeight + fitPad
+  const delta = Math.max(overflow, Math.min(step, overflow + lineHeight * 0.25))
+  const maxTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+  scrollEl.scrollTop = Math.min(maxTop, scrollEl.scrollTop + delta)
+}
+
+/** Wait for blocks to mount and layout to settle, then pin to block start. */
 async function scrollDownAfterRender(behavior = 'smooth') {
   const expectedCount = visibleBlocks.value.length
   if (!expectedCount) return
@@ -279,13 +376,14 @@ async function scrollDownAfterRender(behavior = 'smooth') {
   let lastHeight = -1
   let stable = 0
   let scrollEl = null
+  let block = null
 
   for (let attempt = 0; attempt < 50; attempt++) {
     await nextTick()
     await new Promise((resolve) => requestAnimationFrame(resolve))
 
     scrollEl = getScrollEl()
-    const block = activeBlockRef.value
+    block = activeBlockRef.value
     if (!scrollEl || !block) {
       await new Promise((resolve) => setTimeout(resolve, 20))
       continue
@@ -296,9 +394,6 @@ async function scrollDownAfterRender(behavior = 'smooth') {
       await new Promise((resolve) => setTimeout(resolve, 20))
       continue
     }
-
-    // Keep pinned to bottom while layout settles (no animation yet).
-    scrollEl.scrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
 
     const height = scrollEl.scrollHeight
     if (height > 0 && height === lastHeight) {
@@ -311,19 +406,13 @@ async function scrollDownAfterRender(behavior = 'smooth') {
   }
 
   if (!scrollEl) scrollEl = getScrollEl()
-  if (!scrollEl) return
+  block = activeBlockRef.value
+  if (!scrollEl || !block) return
 
-  const finalTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
-  if (behavior === 'auto' || behavior === 'instant') {
-    scrollEl.scrollTop = finalTop
-  } else {
-    // Step back a bit then ease down so the motion is visible and snappy.
-    scrollEl.scrollTop = Math.max(0, finalTop - Math.min(120, finalTop * 0.12))
-    await animateScrollTo(scrollEl, finalTop, 260)
-  }
+  await scrollToBlockStart(scrollEl, block, behavior)
 }
 
-/** Wait until the new active block is mounted, then scroll down. */
+/** Wait until the new active block is mounted, then scroll to its start. */
 async function scrollAfterNewBlock(behavior = 'smooth') {
   await scrollDownAfterRender(behavior)
 }
@@ -691,8 +780,9 @@ function backToLibrary() {
 }
 
 .reader-block-slot--active {
+  /* Room below so typewriter scroll can lift the block as text fills. */
   padding-bottom: clamp(10rem, 36vh, 18rem);
-  scroll-margin-top: 26vh;
+  scroll-margin-top: clamp(2.5rem, 10vh, 5rem);
 }
 
 .reader-block-slot:not(.reader-block-slot--active) {
