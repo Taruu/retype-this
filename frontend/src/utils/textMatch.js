@@ -1,11 +1,34 @@
 const SPACE_RE = /[\s\u00a0\u2000-\u200b\u202f\u205f\u3000]/
 
 let charMappings = {}
+let orderedMappingEntries = []
 const expectedCache = new Map()
 const EXPECTED_CACHE_MAX = 48
 
+function isWhitespaceMappingKey(key) {
+  if (!key || key.length !== 1) return false
+  return SPACE_RE.test(key)
+}
+
+function buildOrderedMappingEntries(mappings) {
+  const punctuation = []
+  const whitespace = []
+  for (const [from, to] of Object.entries(mappings || {})) {
+    if (!from) continue
+    if (isWhitespaceMappingKey(from)) {
+      whitespace.push([from, to])
+    } else {
+      punctuation.push([from, to])
+    }
+  }
+  punctuation.sort((a, b) => b[0].length - a[0].length || a[0].localeCompare(b[0]))
+  whitespace.sort((a, b) => a[0].localeCompare(b[0]))
+  return [...punctuation, ...whitespace]
+}
+
 export function setCharMappings(mappings) {
   charMappings = mappings || {}
+  orderedMappingEntries = buildOrderedMappingEntries(charMappings)
   expectedCache.clear()
 }
 
@@ -14,11 +37,12 @@ export function getCharMappings() {
 }
 
 function isSpaceChar(ch) {
+  if (ch === '\n' || ch === '\r') return false
   return SPACE_RE.test(ch)
 }
 
 function hasCharMappings() {
-  return Object.keys(charMappings).some((key) => key)
+  return orderedMappingEntries.length > 0
 }
 
 function normalizeNfc(text) {
@@ -27,14 +51,14 @@ function normalizeNfc(text) {
 
 function applyCharMappings(text) {
   let result = text
-  for (const [from, to] of Object.entries(charMappings)) {
-    if (!from) continue
+  for (const [from, to] of orderedMappingEntries) {
     result = result.split(from).join(to)
   }
   return result
 }
 
 function canonicalizeSpaceChar(ch) {
+  if (ch === '\n' || ch === '\r') return '\n'
   return SPACE_RE.test(ch) ? ' ' : ch
 }
 
@@ -43,7 +67,9 @@ function normalizeWhitespace(text, { trim }) {
   for (const ch of text) {
     result += canonicalizeSpaceChar(ch)
   }
-  return trim ? result.trim() : result
+  if (!trim) return result
+  const lines = result.split('\n').map((line) => line.trim())
+  return lines.join('\n').replace(/^\n+|\n+$/g, '')
 }
 
 function normalizeCore(text, { trim }) {
@@ -83,16 +109,9 @@ export function normalizeExpectedWithMap(expected) {
   let i = 0
 
   while (i < source.length) {
-    if (isSpaceChar(source[i])) {
-      chars.push(' ')
-      indexMap.push(i)
-      i += 1
-      continue
-    }
-
-    let mappedText = source[i]
-    let consumed = 1
-    for (const [from, to] of Object.entries(charMappings)) {
+    let mappedText = null
+    let consumed = 0
+    for (const [from, to] of orderedMappingEntries) {
       if (from && source.startsWith(from, i)) {
         mappedText = to
         consumed = from.length
@@ -100,12 +119,26 @@ export function normalizeExpectedWithMap(expected) {
       }
     }
 
-    const originalEnd = i + consumed - 1
-    for (const ch of mappedText) {
-      chars.push(ch)
-      indexMap.push(originalEnd)
+    if (mappedText !== null) {
+      const originalEnd = i + consumed - 1
+      for (const ch of mappedText) {
+        chars.push(ch)
+        indexMap.push(originalEnd)
+      }
+      i += consumed
+      continue
     }
-    i += consumed
+
+    if (isSpaceChar(source[i])) {
+      chars.push(' ')
+      indexMap.push(i)
+      i += 1
+      continue
+    }
+
+    chars.push(source[i])
+    indexMap.push(i)
+    i += 1
   }
 
   return {
@@ -155,6 +188,27 @@ function normalizeTypedWithRawMap(typed) {
   let i = 0
 
   while (i < source.length) {
+    let mappedText = null
+    let consumed = 0
+    for (const [from, to] of orderedMappingEntries) {
+      if (from && source.startsWith(from, i)) {
+        mappedText = to
+        consumed = from.length
+        break
+      }
+    }
+
+    if (mappedText !== null) {
+      const rawEnd = Math.min(i + consumed, typed.length)
+      for (const ch of mappedText) {
+        chars.push(ch)
+        normToRawStart.push(i)
+        normToRawEnd.push(rawEnd)
+      }
+      i += consumed
+      continue
+    }
+
     if (isSpaceChar(source[i])) {
       chars.push(' ')
       normToRawStart.push(i)
@@ -163,23 +217,10 @@ function normalizeTypedWithRawMap(typed) {
       continue
     }
 
-    let mappedText = source[i]
-    let consumed = 1
-    for (const [from, to] of Object.entries(charMappings)) {
-      if (from && source.startsWith(from, i)) {
-        mappedText = to
-        consumed = from.length
-        break
-      }
-    }
-
-    const rawEnd = Math.min(i + consumed, typed.length)
-    for (const ch of mappedText) {
-      chars.push(ch)
-      normToRawStart.push(i)
-      normToRawEnd.push(rawEnd)
-    }
-    i += consumed
+    chars.push(source[i])
+    normToRawStart.push(i)
+    normToRawEnd.push(i + 1)
+    i += 1
   }
 
   return {
@@ -507,4 +548,18 @@ export function saveDraft(bookId, blockIndex, text) {
 
 export function clearDraft(bookId, blockIndex) {
   saveDraft(bookId, blockIndex, '')
+}
+
+export function clearAllDraftsForBook(bookId) {
+  try {
+    const prefix = `retype-draft:${bookId}:`
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i)
+      if (key?.startsWith(prefix)) {
+        localStorage.removeItem(key)
+      }
+    }
+  } catch {
+    // ignore quota errors
+  }
 }

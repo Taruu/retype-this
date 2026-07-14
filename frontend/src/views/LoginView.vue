@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import ThemeToggle from '../components/ThemeToggle.vue'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -25,8 +26,11 @@ async function submit() {
 
 <template>
   <main class="container login-page">
+    <div class="login-toolbar">
+      <ThemeToggle />
+    </div>
     <section class="card login-card">
-      <h1 class="login-title">Retype Book</h1>
+      <h1 class="login-title">retype-this</h1>
       <p class="muted">Sign in to upload books and practice touch typing.</p>
       <form class="login-form" autocomplete="off" @submit.prevent="submit">
         <label>
@@ -61,6 +65,13 @@ async function submit() {
 <style scoped>
 .login-page {
   padding: 4rem 0;
+  position: relative;
+}
+
+.login-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
 }
 
 .login-card {

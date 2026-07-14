@@ -56,6 +56,9 @@ def _display_html(kind: str, html: str, text: str) -> str:
         return f"<{tag}>{text}</{tag}>"
     if kind == "blockquote":
         return f"<blockquote>{text}</blockquote>"
+    if kind == "verse":
+        inner = "<br />\n".join(text.split("\n"))
+        return f'<div class="line-block">{inner}</div>'
     return f"<p>{text}</p>"
 
 

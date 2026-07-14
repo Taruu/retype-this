@@ -2,8 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BlockReader from '../components/BlockReader.vue'
+import SessionTimer from '../components/SessionTimer.vue'
+import ThemeToggle from '../components/ThemeToggle.vue'
 import { useReaderStore } from '../stores/reader'
 import { useSettingsStore } from '../stores/settings'
+import { useTimerStore } from '../stores/timer'
 import { compareTypedText } from '../utils/textMatch'
 
 const props = defineProps({
@@ -15,9 +18,12 @@ const route = useRoute()
 const router = useRouter()
 const reader = useReaderStore()
 const settings = useSettingsStore()
+const timer = useTimerStore()
 const pageError = ref('')
 const activeBlockRef = ref(null)
+const readerScrollRef = ref(null)
 const hasScrolledInitially = ref(false)
+const justFinishedBook = ref(false)
 
 const saveStatusLabel = computed(() => {
   switch (reader.saveStatus) {
@@ -63,6 +69,7 @@ const activeBlockComplete = computed(() => {
 })
 
 const isPageTypingComplete = computed(() => {
+  if (reader.isBookComplete) return true
   if (!reader.pageData) return false
   const lastBlockOnPage = Math.max(...reader.pageData.blocks.map((block) => block.index))
   return reader.progress.typing_block_index > lastBlockOnPage
@@ -75,6 +82,7 @@ const canGoNextPage = computed(() => {
 /** Client-side only: hide paragraphs after the current typing block. */
 const visibleBlocks = computed(() => {
   if (!reader.pageData) return []
+  if (reader.isBookComplete) return reader.pageData.blocks
   const currentIndex = reader.progress.typing_block_index
   return reader.pageData.blocks.filter((block) => block.index <= currentIndex)
 })
@@ -84,10 +92,15 @@ async function bootstrap() {
   reader.reset()
   pageError.value = ''
   hasScrolledInitially.value = false
+  justFinishedBook.value = false
   try {
     await reader.loadBook(props.id, props.page)
     if (route.name === 'book-redirect') {
       router.replace(`/book/${props.id}/page/${reader.currentPage}`)
+    }
+    if (!reader.isBookComplete && activeBlock.value && !hasScrolledInitially.value) {
+      hasScrolledInitially.value = true
+      await scrollDownAfterRender('auto')
     }
   } catch {
     // surfaced in template
@@ -95,12 +108,14 @@ async function bootstrap() {
 }
 
 onMounted(() => {
+  document.documentElement.classList.add('reader-lock')
   bootstrap()
   window.addEventListener('beforeunload', flushProgress)
   window.addEventListener('keydown', onKeydown)
 })
 
 onBeforeUnmount(() => {
+  document.documentElement.classList.remove('reader-lock')
   window.removeEventListener('beforeunload', flushProgress)
   window.removeEventListener('keydown', onKeydown)
   flushProgress()
@@ -121,7 +136,7 @@ async function goToPage(nextPage) {
   if (nextPage < 0 || nextPage >= reader.pageCount) return
 
   const goingForward = nextPage > reader.currentPage
-  if (goingForward) {
+  if (goingForward && !reader.isBookComplete) {
     if (nextPage > reader.maxUnlockedPage) {
       pageError.value = 'Finish the current typing block before reading further.'
       return
@@ -143,7 +158,17 @@ async function goToNextPage() {
 }
 
 function onKeydown(event) {
+  const tag = event.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) {
+    return
+  }
+
   if (event.key === 'Escape') {
+    if (timer.open) {
+      event.preventDefault()
+      timer.open = false
+      return
+    }
     event.preventDefault()
     flushProgress()
     backToLibrary()
@@ -174,8 +199,22 @@ function onKeydown(event) {
 
 async function onComplete(typedText) {
   pageError.value = ''
+  const wasLastBlock = reader.book?.block_count
+    ? reader.progress.typing_block_index === reader.book.block_count - 1
+    : false
   try {
     await reader.completeCurrentBlock(typedText)
+    if (wasLastBlock || reader.isBookComplete) {
+      justFinishedBook.value = true
+      return true
+    }
+    // Stay on this page when it is finished — next page only via Enter / Page Down / buttons.
+    const nextTypingPage = Math.floor(
+      reader.progress.typing_block_index / (reader.book?.page_size || reader.pageData?.page_size || 4),
+    )
+    if (nextTypingPage === reader.currentPage) {
+      await scrollAfterNewBlock()
+    }
     return true
   } catch (error) {
     pageError.value = error.message || 'Could not complete block'
@@ -208,30 +247,99 @@ function setActiveBlockRef(el) {
   activeBlockRef.value = el
 }
 
-function scrollActiveBlockIntoView(behavior = 'smooth') {
-  nextTick(() => {
-    nextTick(() => {
-      requestAnimationFrame(() => {
-        const block = activeBlockRef.value
-        const scrollEl = block?.closest('.reader-scroll')
-        if (!block || !scrollEl) return
+function getScrollEl() {
+  return readerScrollRef.value || activeBlockRef.value?.closest('.reader-scroll') || null
+}
 
-        const containerRect = scrollEl.getBoundingClientRect()
-        const blockRect = block.getBoundingClientRect()
-        const targetTop = containerRect.top + scrollEl.clientHeight * 0.26
-        const delta = blockRect.top - targetTop
-        scrollEl.scrollBy({ top: delta, behavior })
-      })
-    })
+/** Fast ease-out scroll — quicker than browser smooth, still soft at the end. */
+function animateScrollTo(scrollEl, targetTop, durationMs = 260) {
+  const start = scrollEl.scrollTop
+  const delta = targetTop - start
+  if (Math.abs(delta) < 1) return Promise.resolve()
+
+  const startTime = performance.now()
+  return new Promise((resolve) => {
+    const step = (now) => {
+      const t = Math.min(1, (now - startTime) / durationMs)
+      // ease-out quart: snappy start, soft landing
+      const eased = 1 - (1 - t) ** 4
+      scrollEl.scrollTop = start + delta * eased
+      if (t < 1) requestAnimationFrame(step)
+      else resolve()
+    }
+    requestAnimationFrame(step)
   })
 }
 
+/** Wait for blocks to mount and layout height to settle, then scroll to bottom. */
+async function scrollDownAfterRender(behavior = 'smooth') {
+  const expectedCount = visibleBlocks.value.length
+  if (!expectedCount) return
+
+  let lastHeight = -1
+  let stable = 0
+  let scrollEl = null
+
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await nextTick()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+
+    scrollEl = getScrollEl()
+    const block = activeBlockRef.value
+    if (!scrollEl || !block) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      continue
+    }
+
+    const slotCount = scrollEl.querySelectorAll('.reader-block-slot').length
+    if (slotCount < expectedCount) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      continue
+    }
+
+    // Keep pinned to bottom while layout settles (no animation yet).
+    scrollEl.scrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+
+    const height = scrollEl.scrollHeight
+    if (height > 0 && height === lastHeight) {
+      stable += 1
+      if (stable >= 2) break
+    } else {
+      stable = 0
+      lastHeight = height
+    }
+  }
+
+  if (!scrollEl) scrollEl = getScrollEl()
+  if (!scrollEl) return
+
+  const finalTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+  if (behavior === 'auto' || behavior === 'instant') {
+    scrollEl.scrollTop = finalTop
+  } else {
+    // Step back a bit then ease down so the motion is visible and snappy.
+    scrollEl.scrollTop = Math.max(0, finalTop - Math.min(120, finalTop * 0.12))
+    await animateScrollTo(scrollEl, finalTop, 260)
+  }
+}
+
+/** Wait until the new active block is mounted, then scroll down. */
+async function scrollAfterNewBlock(behavior = 'smooth') {
+  await scrollDownAfterRender(behavior)
+}
+
 watch(
-  () => [reader.loading, reader.pageData, reader.progress.typing_block_index],
-  ([loading, pageData]) => {
-    if (!loading && pageData && activeBlock.value) {
-      scrollActiveBlockIntoView(hasScrolledInitially.value ? 'smooth' : 'instant')
+  () => [reader.loading, reader.pageData],
+  async ([loading, pageData]) => {
+    if (
+      !loading &&
+      pageData &&
+      activeBlock.value &&
+      !reader.isBookComplete &&
+      !hasScrolledInitially.value
+    ) {
       hasScrolledInitially.value = true
+      await scrollDownAfterRender('auto')
     }
   },
 )
@@ -244,48 +352,58 @@ function backToLibrary() {
 <template>
   <main class="container reader-page">
     <header class="reader-header">
-      <div>
-        <button class="btn btn-secondary" type="button" @click="backToLibrary">← Library</button>
-        <h1 class="reader-title">{{ reader.book?.title || 'Loading…' }}</h1>
-        <p class="muted reader-meta">
-          <span>
-            Page {{ reader.currentPage + 1 }} / {{ reader.pageCount || '…' }} ·
-            Block {{ reader.progress.typing_block_index + 1 }} / {{ reader.book?.block_count || '…' }}
-          </span>
-          <span
-            class="reader-save"
-            :class="`reader-save--${reader.saveStatus}`"
-            :title="saveStatusTitle"
-            aria-live="polite"
-          >
-            <span class="reader-save__icon" aria-hidden="true">
-              <span v-if="reader.saveStatus === 'saving'" class="reader-save__spinner" />
-              <span v-else-if="reader.saveStatus === 'saved'">✓</span>
-              <span v-else-if="reader.saveStatus === 'error'">!</span>
-              <span v-else>○</span>
+      <div class="reader-header__main">
+        <div>
+          <button class="btn btn-secondary" type="button" @click="backToLibrary">← Library</button>
+          <h1 class="reader-title">{{ reader.book?.title || 'Loading…' }}</h1>
+          <p class="muted reader-meta">
+            <span>
+              Page {{ reader.currentPage + 1 }} / {{ reader.pageCount || '…' }} ·
+              <template v-if="reader.isBookComplete">
+                Complete · {{ reader.book?.block_count || '…' }} blocks
+              </template>
+              <template v-else>
+                Block {{ reader.progress.typing_block_index + 1 }} / {{ reader.book?.block_count || '…' }}
+              </template>
             </span>
-            <span class="reader-save__label">{{ saveStatusLabel }}</span>
-          </span>
-        </p>
-        <p class="muted reader-hints">Enter — next page when finished · Esc — library</p>
-      </div>
-      <div class="reader-nav">
-        <div class="reader-nav__group">
-          <span class="reader-nav__hint muted">Page Up</span>
-          <button class="btn btn-secondary" type="button" :disabled="reader.currentPage <= 0" @click="goToPage(reader.currentPage - 1)">
-            Previous page
-          </button>
+            <span
+              class="reader-save"
+              :class="`reader-save--${reader.saveStatus}`"
+              :title="saveStatusTitle"
+              aria-live="polite"
+            >
+              <span class="reader-save__icon" aria-hidden="true">
+                <span v-if="reader.saveStatus === 'saving'" class="reader-save__spinner" />
+                <span v-else-if="reader.saveStatus === 'saved'">✓</span>
+                <span v-else-if="reader.saveStatus === 'error'">!</span>
+                <span v-else>○</span>
+              </span>
+              <span class="reader-save__label">{{ saveStatusLabel }}</span>
+            </span>
+          </p>
+          <p v-if="!reader.isBookComplete" class="muted reader-hints">Enter — next page when finished · Esc — library</p>
+          <p v-else class="muted reader-hints">Browse freely · Esc — library</p>
         </div>
-        <div class="reader-nav__group">
-          <span class="reader-nav__hint muted">Page Down</span>
-          <button
-            class="btn btn-secondary"
-            type="button"
-            :disabled="!canGoNextPage"
-            @click="goToNextPage"
-          >
-            Next page
-          </button>
+        <div class="reader-nav">
+          <SessionTimer />
+          <ThemeToggle />
+          <div class="reader-nav__group">
+            <span class="reader-nav__hint muted">Page Up</span>
+            <button class="btn btn-secondary" type="button" :disabled="reader.currentPage <= 0" @click="goToPage(reader.currentPage - 1)">
+              Previous page
+            </button>
+          </div>
+          <div class="reader-nav__group">
+            <span class="reader-nav__hint muted">Page Down</span>
+            <button
+              class="btn btn-secondary"
+              type="button"
+              :disabled="!canGoNextPage"
+              @click="goToNextPage"
+            >
+              Next page
+            </button>
+          </div>
         </div>
       </div>
     </header>
@@ -295,8 +413,15 @@ function backToLibrary() {
     <p v-else-if="reader.error" class="error">{{ reader.error }}</p>
 
     <template v-else-if="reader.pageData">
+      <p v-if="justFinishedBook" class="card reader-finished reader-finished--celebrate">
+        You've finished the book — all blocks typed.
+      </p>
+      <p v-else-if="reader.isBookComplete" class="card reader-finished">
+        This book is complete. Browse pages freely or reset progress from the library.
+      </p>
+
       <p
-        v-if="!activeBlock && typingBlockPage <= reader.maxUnlockedPage"
+        v-else-if="!activeBlock && typingBlockPage <= reader.maxUnlockedPage"
         class="card reader-jump"
       >
         Current typing block is on page {{ typingBlockPage + 1 }}.
@@ -305,26 +430,31 @@ function backToLibrary() {
         </button>
       </p>
 
-      <div class="reader-scroll">
-        <section class="card reader-blocks">
-          <div
-            v-for="block in visibleBlocks"
-            :key="block.index"
-            :ref="block.index === reader.progress.typing_block_index ? setActiveBlockRef : undefined"
-            class="reader-block-slot"
-            :class="{ 'reader-block-slot--active': block.index === reader.progress.typing_block_index }"
-          >
-            <BlockReader
-              :book-id="reader.bookId"
-              :block="block"
-              :status="reader.blockStatus(block.index)"
-              :initial-draft="block.index === reader.progress.typing_block_index ? reader.progress.draft_text : ''"
-              @update:draft="onDraft"
-              @complete="onComplete"
-              @save="onSave"
-            />
-          </div>
-        </section>
+      <div class="reader-scroll-shell">
+        <div class="reader-scroll-fade reader-scroll-fade--top" aria-hidden="true" />
+        <div ref="readerScrollRef" class="reader-scroll">
+          <section class="card reader-blocks">
+            <div
+              v-for="block in visibleBlocks"
+              :key="block.index"
+              :ref="block.index === reader.progress.typing_block_index ? setActiveBlockRef : undefined"
+              class="reader-block-slot"
+              :class="{ 'reader-block-slot--active': block.index === reader.progress.typing_block_index }"
+            >
+              <BlockReader
+                :book-id="reader.bookId"
+                :block="block"
+                :status="reader.blockStatus(block.index)"
+                :initial-draft="block.index === reader.progress.typing_block_index ? reader.progress.draft_text : ''"
+                :is-last-block="!reader.isBookComplete && block.index === (reader.book?.block_count ?? 0) - 1"
+                @update:draft="onDraft"
+                @complete="onComplete"
+                @save="onSave"
+              />
+            </div>
+          </section>
+        </div>
+        <div class="reader-scroll-fade reader-scroll-fade--bottom" aria-hidden="true" />
       </div>
     </template>
   </main>
@@ -334,7 +464,9 @@ function backToLibrary() {
 .reader-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   padding: 1rem 0 0;
   max-width: none;
   width: 100%;
@@ -349,6 +481,14 @@ function backToLibrary() {
   width: min(960px, calc(100% - 2rem));
   margin-inline: auto;
   flex-shrink: 0;
+}
+
+.reader-header__main {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  width: 100%;
 }
 
 .reader-title {
@@ -426,6 +566,8 @@ function backToLibrary() {
   display: flex;
   gap: 0.75rem;
   align-items: flex-end;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .reader-nav__group {
@@ -454,18 +596,95 @@ function backToLibrary() {
   margin-inline: auto;
 }
 
+.reader-finished {
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  width: min(56rem, calc(100% - 2rem));
+  margin-inline: auto;
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.reader-finished--celebrate {
+  font-weight: 600;
+}
+
+.reader-scroll-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: min(56rem, calc(100% - 2rem));
+  margin: 1rem auto 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.reader-scroll-fade {
+  position: absolute;
+  left: 0;
+  right: 8px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.reader-scroll-fade--top {
+  top: 0;
+  height: clamp(2.5rem, 7vh, 4rem);
+  background: linear-gradient(
+    to bottom,
+    var(--bg) 0%,
+    color-mix(in srgb, var(--bg) 72%, transparent) 45%,
+    transparent 100%
+  );
+}
+
+.reader-scroll-fade--bottom {
+  bottom: 0;
+  height: clamp(1.25rem, 4vh, 2.25rem);
+  background: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    color-mix(in srgb, var(--bg) 55%, transparent) 55%,
+    transparent 100%
+  );
+}
+
 .reader-scroll {
   flex: 1;
   min-height: 0;
+  width: 100%;
   overflow-y: auto;
-  margin-top: 1rem;
-  scroll-behavior: smooth;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 55%, var(--border)) transparent;
+}
+
+.reader-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.reader-scroll::-webkit-scrollbar-track {
+  margin-block: 0.5rem;
+  background: transparent;
+}
+
+.reader-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.reader-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--accent) 70%, var(--border));
 }
 
 .reader-blocks {
-  width: min(56rem, calc(100% - 2rem));
-  margin: 0 auto;
-  padding: clamp(4rem, 12vh, 8rem) 1.25rem clamp(2rem, 6vh, 4rem);
+  width: 100%;
+  margin: 0;
+  padding: clamp(2.75rem, 8vh, 5rem) 1rem clamp(2rem, 6vh, 4rem) 0.85rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -478,5 +697,15 @@ function backToLibrary() {
 
 .reader-block-slot:not(.reader-block-slot--active) {
   opacity: 0.8;
+}
+</style>
+
+<style>
+/* Lock document scroll so only the styled reader viewport scrolls. */
+html.reader-lock,
+html.reader-lock body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 </style>

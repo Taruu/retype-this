@@ -11,12 +11,15 @@ import {
 const IDLE_SAVE_MS = 15000
 const DRAFT_SAVE_MS = 400
 const HINT_CURSOR_RADIUS = 1
+/** Visible glyph for newline mistakes (U+21B5 RETURN SYMBOL). */
+const NEWLINE_GLYPH = '\u21B5'
 
 const props = defineProps({
   bookId: { type: Number, required: true },
   blockIndex: { type: Number, required: true },
   expectedText: { type: String, required: true },
   initialDraft: { type: String, default: '' },
+  isLastBlock: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:draft', 'complete', 'save'])
@@ -77,7 +80,7 @@ const statusMessage = computed(() => {
     return 'Type over the text exactly — one character at a time.'
   }
   if (isComplete.value) {
-    return '✓ Match — moving to next block…'
+    return props.isLastBlock ? '✓ Match — finishing the book…' : '✓ Match — moving to next block…'
   }
   if (hasTypos.value) {
     return 'Move the cursor near a red mistake to see the orange correction.'
@@ -113,6 +116,13 @@ function hintSegmentClass(segment) {
     return 'typing-overlay__hint typing-overlay__hint--float'
   }
   return 'typing-overlay__hints-spacer'
+}
+
+/** Show a glyph for newline in typo/hint text so mistakes are visible.
+ *  When keepBreak is true, preserve the line break so overlay stays aligned with the textarea. */
+function visibleMistakeText(text, keepBreak = false) {
+  const replacement = keepBreak ? `${NEWLINE_GLYPH}\n` : NEWLINE_GLYPH
+  return text.replace(/\r\n|\n|\r/g, replacement)
 }
 
 function syncCursorFromInput(event) {
@@ -247,14 +257,14 @@ watch(
             v-for="(segment, index) in guideSegments"
             :key="`h-${index}`"
             :class="hintSegmentClass(segment)"
-          >{{ segment.text }}</span>
+          >{{ isHintNearCursor(segment) ? visibleMistakeText(segment.text) : segment.text }}</span>
         </div>
         <div ref="typedRef" class="typing-overlay__typed" aria-hidden="true">
           <span
             v-for="(segment, index) in typedSegments"
             :key="`t-${index}`"
             :class="segment.state === 'typo' ? 'typing-overlay__typo' : 'typing-overlay__correct'"
-          >{{ segment.text }}</span>
+          >{{ segment.state === 'typo' ? visibleMistakeText(segment.text, true) : segment.text }}</span>
         </div>
         <textarea
           ref="inputRef"
@@ -286,7 +296,7 @@ watch(
 }
 
 .typing-overlay--error {
-  border-color: #e57373;
+  border-color: var(--error-border);
 }
 
 .typing-overlay__progress {
@@ -317,7 +327,7 @@ watch(
 }
 
 .typing-overlay__status--warn {
-  color: #c62828;
+  color: var(--danger);
 }
 
 .typing-overlay__wrap {
@@ -415,8 +425,8 @@ watch(
 }
 
 .typing-overlay__hint {
-  color: #fff;
-  background: #ef6c00;
+  color: var(--hint-text);
+  background: var(--hint);
 }
 
 .typing-overlay__hint--float {
@@ -439,8 +449,8 @@ watch(
 }
 
 .typing-overlay__typo {
-  color: #fff;
-  background: #c62828;
+  color: var(--typo-text);
+  background: var(--typo);
 }
 
 .typing-overlay__input {

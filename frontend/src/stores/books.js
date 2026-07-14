@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/client'
+import { clearAllDraftsForBook } from '../utils/textMatch'
 
 export const useBooksStore = defineStore('books', {
   state: () => ({
@@ -50,6 +51,27 @@ export const useBooksStore = defineStore('books', {
       } catch (error) {
         this.error = error.message || 'Rename failed'
         throw error
+      }
+    },
+    async resetBookProgress(id) {
+      this.error = ''
+      try {
+        const progress = await api.resetProgress(id)
+        const index = this.books.findIndex((item) => item.id === id)
+        if (index >= 0) {
+          this.books[index] = { ...this.books[index], progress }
+        }
+        clearAllDraftsForBook(id)
+        return progress
+      } catch (error) {
+        this.error = error.message || 'Reset failed'
+        throw error
+      }
+    },
+    syncBookProgress(id, progress) {
+      const index = this.books.findIndex((item) => item.id === id)
+      if (index >= 0) {
+        this.books[index] = { ...this.books[index], progress }
       }
     },
   },

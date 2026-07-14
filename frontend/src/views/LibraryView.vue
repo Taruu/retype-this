@@ -1,6 +1,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import SessionTimer from '../components/SessionTimer.vue'
+import ThemeToggle from '../components/ThemeToggle.vue'
 import { useAuthStore } from '../stores/auth'
 import { useBooksStore } from '../stores/books'
 import { useSettingsStore } from '../stores/settings'
@@ -12,6 +14,9 @@ const router = useRouter()
 const fileInput = ref(null)
 const bookListRef = ref(null)
 const selectedIndex = ref(-1)
+const dragDepth = ref(0)
+
+const isDragOver = computed(() => dragDepth.value > 0)
 
 const selectedBook = computed(() => {
   const books = booksStore.books
@@ -99,6 +104,12 @@ function onKeydown(event) {
     return
   }
 
+  if (event.key.toLowerCase() === 'd' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault()
+    resetProgress(book)
+    return
+  }
+
   if (
     (event.key === 'Delete' || event.key === 'Backspace') &&
     !event.ctrlKey &&
@@ -114,11 +125,70 @@ onMounted(async () => {
   await settings.load()
   booksStore.fetchBooks()
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('dragover', preventWindowFileDrop)
+  window.addEventListener('drop', preventWindowFileDrop)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('dragover', preventWindowFileDrop)
+  window.removeEventListener('drop', preventWindowFileDrop)
 })
+
+function preventWindowFileDrop(event) {
+  event.preventDefault()
+  if (event.type === 'drop') {
+    dragDepth.value = 0
+  }
+}
+
+function isAcceptedBookFile(file) {
+  const name = file?.name?.toLowerCase() || ''
+  return name.endsWith('.epub') || name.endsWith('.fb2')
+}
+
+function pickBookFile(fileList) {
+  if (!fileList?.length) return null
+  return Array.from(fileList).find(isAcceptedBookFile) || null
+}
+
+function hasDraggedFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes('Files')
+}
+
+function onDragEnter(event) {
+  if (!hasDraggedFiles(event) || booksStore.uploadLoading) return
+  event.preventDefault()
+  dragDepth.value += 1
+}
+
+function onDragLeave(event) {
+  if (!hasDraggedFiles(event)) return
+  event.preventDefault()
+  dragDepth.value = Math.max(0, dragDepth.value - 1)
+}
+
+function onDragOver(event) {
+  if (!hasDraggedFiles(event) || booksStore.uploadLoading) return
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+async function onDrop(event) {
+  if (!hasDraggedFiles(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  dragDepth.value = 0
+
+  const file = pickBookFile(event.dataTransfer?.files)
+  if (!file) {
+    booksStore.error = 'Only EPUB and FB2 files are supported.'
+    return
+  }
+  await handleUploadFile(file)
+}
 
 function openUpload() {
   fileInput.value?.click()
@@ -134,9 +204,13 @@ async function renameBook(book) {
   }
 }
 
-async function onFileChange(event) {
-  const file = event.target.files?.[0]
+async function handleUploadFile(file) {
   if (!file) return
+  if (!isAcceptedBookFile(file)) {
+    booksStore.error = 'Only EPUB and FB2 files are supported.'
+    return
+  }
+  if (booksStore.uploadLoading) return
   try {
     const book = await booksStore.uploadBook(file)
     const title = window.prompt('Name this book', book.title)
@@ -146,6 +220,13 @@ async function onFileChange(event) {
     router.push(`/book/${book.id}`)
   } catch {
     // error shown in store
+  }
+}
+
+async function onFileChange(event) {
+  const file = event.target.files?.[0]
+  try {
+    await handleUploadFile(file)
   } finally {
     event.target.value = ''
   }
@@ -156,11 +237,36 @@ async function removeBook(id) {
   await booksStore.deleteBook(id)
 }
 
+async function resetProgress(book) {
+  if (!confirm(`Reset progress for "${book.title}"? You will start from the beginning.`)) return
+  try {
+    await booksStore.resetBookProgress(book.id)
+  } catch {
+    // error shown in store
+  }
+}
+
 function openBook(book) {
   const pageSize = book.page_size ?? 4
   const typingIndex = book.progress?.typing_block_index ?? 0
-  const typingPage = Math.floor(typingIndex / pageSize)
-  router.push(`/book/${book.id}/page/${typingPage}`)
+  const total = book.block_count || 0
+  const pageCount = total > 0 ? Math.ceil(total / pageSize) : 1
+  const isComplete = total > 0 && typingIndex >= total
+  const page = isComplete
+    ? Math.min(book.progress?.reading_page ?? 0, Math.max(0, pageCount - 1))
+    : Math.floor(typingIndex / pageSize)
+  router.push(`/book/${book.id}/page/${page}`)
+}
+
+function bookProgress(book) {
+  const finished = book.progress?.typing_block_index ?? 0
+  const total = book.block_count || 0
+  return {
+    finished,
+    total,
+    percent: total > 0 ? Math.round((finished / total) * 100) : 0,
+    isComplete: total > 0 && finished >= total,
+  }
 }
 
 function logout() {
@@ -170,17 +276,32 @@ function logout() {
 </script>
 
 <template>
-  <main class="container" style="padding: 2rem 0 4rem;">
-    <header style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 2rem;">
-      <div>
-        <h1 style="margin: 0;">Library</h1>
-        <p class="muted" style="margin: 0.25rem 0 0;">Upload EPUB or FB2 files and retype them page by page.</p>
-      </div>
-      <div style="display: flex; gap: 0.75rem;">
-        <button class="btn" type="button" :disabled="booksStore.uploadLoading" @click="openUpload">
-          {{ booksStore.uploadLoading ? 'Uploading…' : 'Upload book' }}
-        </button>
-        <button class="btn btn-secondary" type="button" @click="logout">Logout</button>
+  <main
+    class="container library-page"
+    :class="{ 'library-page--dragover': isDragOver }"
+    @dragenter="onDragEnter"
+    @dragleave="onDragLeave"
+    @dragover="onDragOver"
+    @drop="onDrop"
+  >
+    <div v-if="isDragOver" class="library-drop-overlay" aria-hidden="true">
+      <p class="library-drop-overlay__text">Drop EPUB or FB2 to upload</p>
+    </div>
+
+    <header class="library-header">
+      <div class="library-header__main">
+        <div>
+          <h1 style="margin: 0;">Library</h1>
+          <p class="muted" style="margin: 0.25rem 0 0;">Upload or drop EPUB or FB2 files and retype them page by page.</p>
+        </div>
+        <div class="library-header__actions">
+          <SessionTimer />
+          <ThemeToggle />
+          <button class="btn" type="button" :disabled="booksStore.uploadLoading" @click="openUpload">
+            {{ booksStore.uploadLoading ? 'Uploading…' : 'Upload book' }}
+          </button>
+          <button class="btn btn-secondary" type="button" @click="logout">Logout</button>
+        </div>
       </div>
       <input ref="fileInput" type="file" accept=".epub,.fb2" hidden @change="onFileChange" />
     </header>
@@ -188,12 +309,12 @@ function logout() {
     <p v-if="booksStore.error" class="error">{{ booksStore.error }}</p>
     <p v-if="booksStore.loading" class="muted">Loading books…</p>
     <p v-else-if="booksStore.books.length" class="muted library-shortcuts">
-      ↑↓ select book · Enter continue · R rename · Delete remove · Esc logout
+      ↑↓ select book · Enter continue · R rename · D reset · Delete remove · Esc logout
     </p>
 
-    <section v-if="!booksStore.loading && booksStore.books.length === 0" class="card" style="padding: 2rem;">
+    <section v-if="!booksStore.loading && booksStore.books.length === 0" class="card library-empty" style="padding: 2rem;">
       <h2 style="margin-top: 0;">No books yet</h2>
-      <p class="muted">Upload an EPUB or FB2 file to start retyping.</p>
+      <p class="muted">Upload or drag and drop an EPUB or FB2 file to start retyping.</p>
     </section>
 
     <section v-else ref="bookListRef" class="library-list">
@@ -204,21 +325,93 @@ function logout() {
         :class="{ 'library-book--selected': index === selectedIndex }"
         @click="selectBook(index)"
       >
-        <div style="display: flex; justify-content: space-between; gap: 1rem; align-items: start;">
-          <div>
-            <h2 style="margin: 0 0 0.25rem;">{{ book.title }}</h2>
-            <p class="muted" style="margin: 0;">
-              {{ book.author || 'Unknown author' }} · {{ book.format.toUpperCase() }} ·
-              {{ book.block_count }} blocks
-            </p>
-            <p v-if="book.progress" class="muted" style="margin: 0.5rem 0 0;">
-              Page {{ book.progress.reading_page + 1 }} · Block {{ book.progress.typing_block_index + 1 }}
-            </p>
+        <div class="library-book__content">
+          <h2 class="library-book__title">{{ book.title }}</h2>
+          <p class="muted library-book__meta">
+            {{ book.author || 'Unknown author' }} · {{ book.format.toUpperCase() }} ·
+            {{ book.block_count }} blocks
+          </p>
+
+          <div v-if="book.block_count" class="library-book__progress">
+            <div class="library-book__progress-track" aria-hidden="true">
+              <div
+                class="library-book__progress-bar"
+                :class="{ 'library-book__progress-bar--complete': bookProgress(book).isComplete }"
+                :style="{ width: `${bookProgress(book).percent}%` }"
+              />
+            </div>
+            <span class="muted library-book__progress-label">
+              <template v-if="bookProgress(book).isComplete">Complete</template>
+              <template v-else>
+                {{ bookProgress(book).finished }} / {{ bookProgress(book).total }} blocks
+                ({{ bookProgress(book).percent }}%)
+              </template>
+            </span>
           </div>
+
           <div class="library-book__actions">
-            <button class="btn" type="button" @click.stop="openBook(book)">Continue</button>
-            <button class="btn btn-secondary btn-sm" type="button" @click.stop="renameBook(book)">Rename</button>
-            <button class="btn btn-secondary btn-sm" type="button" @click.stop="removeBook(book.id)">Delete</button>
+            <div class="library-action">
+              <button
+                class="library-action__btn"
+                type="button"
+                :aria-label="bookProgress(book).isComplete ? 'Read' : 'Continue'"
+                aria-keyshortcuts="Enter"
+                @click.stop="openBook(book)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">Enter</kbd>
+            </div>
+            <div class="library-action">
+              <button
+                class="library-action__btn"
+                type="button"
+                aria-label="Rename"
+                aria-keyshortcuts="R"
+                @click.stop="renameBook(book)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">R</kbd>
+            </div>
+            <div class="library-action">
+              <button
+                class="library-action__btn library-action__btn--reset"
+                type="button"
+                aria-label="Reset progress"
+                aria-keyshortcuts="D"
+                @click.stop="resetProgress(book)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">D</kbd>
+            </div>
+            <div class="library-action">
+              <button
+                class="library-action__btn library-action__btn--danger"
+                type="button"
+                aria-label="Delete"
+                aria-keyshortcuts="Delete"
+                @click.stop="removeBook(book.id)"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4h8v2" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                </svg>
+              </button>
+              <kbd class="library-action__key">Del</kbd>
+            </div>
           </div>
         </div>
       </article>
@@ -227,6 +420,60 @@ function logout() {
 </template>
 
 <style scoped>
+.library-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.library-header__main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.library-header__actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.library-page {
+  position: relative;
+  padding: 2rem 0 4rem;
+}
+
+.library-page--dragover {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 8px;
+  border-radius: 16px;
+}
+
+.library-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent-soft) 82%, transparent);
+  pointer-events: none;
+}
+
+.library-drop-overlay__text {
+  margin: 0;
+  padding: 1rem 1.5rem;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .library-shortcuts {
   margin: 0 0 1rem;
   font-size: 0.85rem;
@@ -248,16 +495,99 @@ function logout() {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
-.library-book__actions {
+.library-book__content {
   display: flex;
+  flex-direction: column;
   gap: 0.5rem;
-  flex-wrap: wrap;
-  align-items: center;
 }
 
-.btn-sm {
-  padding: 0.35rem 0.6rem;
+.library-book__title {
+  margin: 0;
+}
+
+.library-book__meta {
+  margin: 0;
+}
+
+.library-book__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.library-book__progress-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.library-book__progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.library-book__progress-bar--complete {
+  background: var(--success);
+}
+
+.library-book__progress-label {
   font-size: 0.8rem;
-  border-radius: 8px;
+}
+
+.library-book__actions {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.25rem;
+}
+
+.library-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.library-action__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.library-action__btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.library-action__btn--danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.library-action__btn--reset:hover {
+  border-color: var(--hint);
+  color: var(--hint);
+}
+
+.library-action__key {
+  font-family: inherit;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
 }
 </style>

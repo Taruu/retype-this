@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/client'
 import { clearDraft } from '../utils/textMatch'
+import { useBooksStore } from './books'
 
 export const useReaderStore = defineStore('reader', {
   state: () => ({
@@ -25,11 +26,22 @@ export const useReaderStore = defineStore('reader', {
   }),
   getters: {
     pageSize: (state) => state.book?.page_size || state.pageData?.page_size || 4,
-    maxUnlockedPage: (state) => {
+    isBookComplete(state) {
+      const blockCount = state.book?.block_count || 0
+      return blockCount > 0 && state.progress.typing_block_index >= blockCount
+    },
+    maxUnlockedPage(state) {
       const pageSize = state.book?.page_size || state.pageData?.page_size || 4
+      const blockCount = state.book?.block_count || 0
+      if (blockCount > 0 && state.progress.typing_block_index >= blockCount) {
+        return Math.max(0, Math.ceil(blockCount / pageSize) - 1)
+      }
       return Math.floor(state.progress.typing_block_index / pageSize)
     },
     canGoForward(state) {
+      if (this.isBookComplete) {
+        return state.currentPage < state.pageCount - 1
+      }
       return state.currentPage < this.maxUnlockedPage
     },
     canGoNextPage(state) {
@@ -76,11 +88,19 @@ export const useReaderStore = defineStore('reader', {
         this.saveStatus = 'saved'
         this.lastSavedAt = Date.now()
         const pageSize = book.page_size || 4
+        const isComplete = book.block_count > 0 && progress.typing_block_index >= book.block_count
         const typingPage = Math.floor(progress.typing_block_index / pageSize)
+        const defaultPage = isComplete
+          ? Math.min(progress.reading_page ?? 0, Math.max(0, pageCount.page_count - 1))
+          : typingPage
         const targetPage = page !== null && page !== undefined
           ? Number(page)
-          : typingPage
-        await this.loadPage(targetPage)
+          : defaultPage
+        const safePage = Math.min(
+          Math.max(0, targetPage),
+          Math.max(0, pageCount.page_count - 1),
+        )
+        await this.loadPage(safePage)
       } catch (error) {
         this.error = error.message || 'Failed to load book'
         throw error
@@ -158,6 +178,7 @@ export const useReaderStore = defineStore('reader', {
         char_offset: saved.char_offset,
         draft_text: saved.draft_text || '',
       }
+      useBooksStore().syncBookProgress(this.bookId, saved)
       this.draftText = ''
       this.saveStatus = 'saved'
       this.lastSavedAt = Date.now()
@@ -165,6 +186,7 @@ export const useReaderStore = defineStore('reader', {
       await this.loadPage(this.currentPage)
     },
     blockStatus(blockIndex) {
+      if (this.isBookComplete) return 'done'
       if (blockIndex < this.progress.typing_block_index) return 'done'
       if (blockIndex === this.progress.typing_block_index) return 'active'
       return 'locked'

@@ -13,7 +13,7 @@ from app.spa_static import SPAStaticFiles
 config = load_config()
 init_db(config.server.data_dir)
 
-app = FastAPI(title="Retype Book", version="0.1.0")
+app = FastAPI(title="retype-this", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
