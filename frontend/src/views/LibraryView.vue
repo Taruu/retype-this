@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import SessionTimer from '../components/SessionTimer.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
 import { useAuthStore } from '../stores/auth'
 import { useBooksStore } from '../stores/books'
@@ -287,17 +288,20 @@ function logout() {
       <p class="library-drop-overlay__text">Drop EPUB or FB2 to upload</p>
     </div>
 
-    <header style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 2rem;">
-      <div>
-        <h1 style="margin: 0;">Library</h1>
-        <p class="muted" style="margin: 0.25rem 0 0;">Upload or drop EPUB or FB2 files and retype them page by page.</p>
-      </div>
-      <div style="display: flex; gap: 0.75rem; align-items: center;">
-        <ThemeToggle />
-        <button class="btn" type="button" :disabled="booksStore.uploadLoading" @click="openUpload">
-          {{ booksStore.uploadLoading ? 'Uploading…' : 'Upload book' }}
-        </button>
-        <button class="btn btn-secondary" type="button" @click="logout">Logout</button>
+    <header class="library-header">
+      <div class="library-header__main">
+        <div>
+          <h1 style="margin: 0;">Library</h1>
+          <p class="muted" style="margin: 0.25rem 0 0;">Upload or drop EPUB or FB2 files and retype them page by page.</p>
+        </div>
+        <div class="library-header__actions">
+          <SessionTimer />
+          <ThemeToggle />
+          <button class="btn" type="button" :disabled="booksStore.uploadLoading" @click="openUpload">
+            {{ booksStore.uploadLoading ? 'Uploading…' : 'Upload book' }}
+          </button>
+          <button class="btn btn-secondary" type="button" @click="logout">Logout</button>
+        </div>
       </div>
       <input ref="fileInput" type="file" accept=".epub,.fb2" hidden @change="onFileChange" />
     </header>
@@ -416,6 +420,27 @@ function logout() {
 </template>
 
 <style scoped>
+.library-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.library-header__main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.library-header__actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .library-page {
   position: relative;
   padding: 2rem 0 4rem;

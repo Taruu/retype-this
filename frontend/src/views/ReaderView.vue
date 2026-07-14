@@ -2,9 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BlockReader from '../components/BlockReader.vue'
+import SessionTimer from '../components/SessionTimer.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
 import { useReaderStore } from '../stores/reader'
 import { useSettingsStore } from '../stores/settings'
+import { useTimerStore } from '../stores/timer'
 import { compareTypedText } from '../utils/textMatch'
 
 const props = defineProps({
@@ -16,6 +18,7 @@ const route = useRoute()
 const router = useRouter()
 const reader = useReaderStore()
 const settings = useSettingsStore()
+const timer = useTimerStore()
 const pageError = ref('')
 const activeBlockRef = ref(null)
 const readerScrollRef = ref(null)
@@ -155,7 +158,17 @@ async function goToNextPage() {
 }
 
 function onKeydown(event) {
+  const tag = event.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) {
+    return
+  }
+
   if (event.key === 'Escape') {
+    if (timer.open) {
+      event.preventDefault()
+      timer.open = false
+      return
+    }
     event.preventDefault()
     flushProgress()
     backToLibrary()
@@ -339,55 +352,58 @@ function backToLibrary() {
 <template>
   <main class="container reader-page">
     <header class="reader-header">
-      <div>
-        <button class="btn btn-secondary" type="button" @click="backToLibrary">← Library</button>
-        <h1 class="reader-title">{{ reader.book?.title || 'Loading…' }}</h1>
-        <p class="muted reader-meta">
-          <span>
-            Page {{ reader.currentPage + 1 }} / {{ reader.pageCount || '…' }} ·
-            <template v-if="reader.isBookComplete">
-              Complete · {{ reader.book?.block_count || '…' }} blocks
-            </template>
-            <template v-else>
-              Block {{ reader.progress.typing_block_index + 1 }} / {{ reader.book?.block_count || '…' }}
-            </template>
-          </span>
-          <span
-            class="reader-save"
-            :class="`reader-save--${reader.saveStatus}`"
-            :title="saveStatusTitle"
-            aria-live="polite"
-          >
-            <span class="reader-save__icon" aria-hidden="true">
-              <span v-if="reader.saveStatus === 'saving'" class="reader-save__spinner" />
-              <span v-else-if="reader.saveStatus === 'saved'">✓</span>
-              <span v-else-if="reader.saveStatus === 'error'">!</span>
-              <span v-else>○</span>
+      <div class="reader-header__main">
+        <div>
+          <button class="btn btn-secondary" type="button" @click="backToLibrary">← Library</button>
+          <h1 class="reader-title">{{ reader.book?.title || 'Loading…' }}</h1>
+          <p class="muted reader-meta">
+            <span>
+              Page {{ reader.currentPage + 1 }} / {{ reader.pageCount || '…' }} ·
+              <template v-if="reader.isBookComplete">
+                Complete · {{ reader.book?.block_count || '…' }} blocks
+              </template>
+              <template v-else>
+                Block {{ reader.progress.typing_block_index + 1 }} / {{ reader.book?.block_count || '…' }}
+              </template>
             </span>
-            <span class="reader-save__label">{{ saveStatusLabel }}</span>
-          </span>
-        </p>
-        <p v-if="!reader.isBookComplete" class="muted reader-hints">Enter — next page when finished · Esc — library</p>
-        <p v-else class="muted reader-hints">Browse freely · Esc — library</p>
-      </div>
-      <div class="reader-nav">
-        <ThemeToggle />
-        <div class="reader-nav__group">
-          <span class="reader-nav__hint muted">Page Up</span>
-          <button class="btn btn-secondary" type="button" :disabled="reader.currentPage <= 0" @click="goToPage(reader.currentPage - 1)">
-            Previous page
-          </button>
+            <span
+              class="reader-save"
+              :class="`reader-save--${reader.saveStatus}`"
+              :title="saveStatusTitle"
+              aria-live="polite"
+            >
+              <span class="reader-save__icon" aria-hidden="true">
+                <span v-if="reader.saveStatus === 'saving'" class="reader-save__spinner" />
+                <span v-else-if="reader.saveStatus === 'saved'">✓</span>
+                <span v-else-if="reader.saveStatus === 'error'">!</span>
+                <span v-else>○</span>
+              </span>
+              <span class="reader-save__label">{{ saveStatusLabel }}</span>
+            </span>
+          </p>
+          <p v-if="!reader.isBookComplete" class="muted reader-hints">Enter — next page when finished · Esc — library</p>
+          <p v-else class="muted reader-hints">Browse freely · Esc — library</p>
         </div>
-        <div class="reader-nav__group">
-          <span class="reader-nav__hint muted">Page Down</span>
-          <button
-            class="btn btn-secondary"
-            type="button"
-            :disabled="!canGoNextPage"
-            @click="goToNextPage"
-          >
-            Next page
-          </button>
+        <div class="reader-nav">
+          <SessionTimer />
+          <ThemeToggle />
+          <div class="reader-nav__group">
+            <span class="reader-nav__hint muted">Page Up</span>
+            <button class="btn btn-secondary" type="button" :disabled="reader.currentPage <= 0" @click="goToPage(reader.currentPage - 1)">
+              Previous page
+            </button>
+          </div>
+          <div class="reader-nav__group">
+            <span class="reader-nav__hint muted">Page Down</span>
+            <button
+              class="btn btn-secondary"
+              type="button"
+              :disabled="!canGoNextPage"
+              @click="goToNextPage"
+            >
+              Next page
+            </button>
+          </div>
         </div>
       </div>
     </header>
@@ -467,6 +483,14 @@ function backToLibrary() {
   flex-shrink: 0;
 }
 
+.reader-header__main {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  width: 100%;
+}
+
 .reader-title {
   margin: 0.5rem 0 0.2rem;
 }
@@ -542,6 +566,8 @@ function backToLibrary() {
   display: flex;
   gap: 0.75rem;
   align-items: flex-end;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .reader-nav__group {
