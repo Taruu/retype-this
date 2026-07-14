@@ -18,6 +18,7 @@ const reader = useReaderStore()
 const settings = useSettingsStore()
 const pageError = ref('')
 const activeBlockRef = ref(null)
+const readerScrollRef = ref(null)
 const hasScrolledInitially = ref(false)
 const justFinishedBook = ref(false)
 
@@ -94,18 +95,24 @@ async function bootstrap() {
     if (route.name === 'book-redirect') {
       router.replace(`/book/${props.id}/page/${reader.currentPage}`)
     }
+    if (!reader.isBookComplete && activeBlock.value && !hasScrolledInitially.value) {
+      hasScrolledInitially.value = true
+      await scrollDownAfterRender('auto')
+    }
   } catch {
     // surfaced in template
   }
 }
 
 onMounted(() => {
+  document.documentElement.classList.add('reader-lock')
   bootstrap()
   window.addEventListener('beforeunload', flushProgress)
   window.addEventListener('keydown', onKeydown)
 })
 
 onBeforeUnmount(() => {
+  document.documentElement.classList.remove('reader-lock')
   window.removeEventListener('beforeunload', flushProgress)
   window.removeEventListener('keydown', onKeydown)
   flushProgress()
@@ -186,6 +193,14 @@ async function onComplete(typedText) {
     await reader.completeCurrentBlock(typedText)
     if (wasLastBlock || reader.isBookComplete) {
       justFinishedBook.value = true
+      return true
+    }
+    // Stay on this page when it is finished — next page only via Enter / Page Down / buttons.
+    const nextTypingPage = Math.floor(
+      reader.progress.typing_block_index / (reader.book?.page_size || reader.pageData?.page_size || 4),
+    )
+    if (nextTypingPage === reader.currentPage) {
+      await scrollAfterNewBlock()
     }
     return true
   } catch (error) {
@@ -219,30 +234,99 @@ function setActiveBlockRef(el) {
   activeBlockRef.value = el
 }
 
-function scrollActiveBlockIntoView(behavior = 'smooth') {
-  nextTick(() => {
-    nextTick(() => {
-      requestAnimationFrame(() => {
-        const block = activeBlockRef.value
-        const scrollEl = block?.closest('.reader-scroll')
-        if (!block || !scrollEl) return
+function getScrollEl() {
+  return readerScrollRef.value || activeBlockRef.value?.closest('.reader-scroll') || null
+}
 
-        const containerRect = scrollEl.getBoundingClientRect()
-        const blockRect = block.getBoundingClientRect()
-        const targetTop = containerRect.top + scrollEl.clientHeight * 0.26
-        const delta = blockRect.top - targetTop
-        scrollEl.scrollBy({ top: delta, behavior })
-      })
-    })
+/** Fast ease-out scroll — quicker than browser smooth, still soft at the end. */
+function animateScrollTo(scrollEl, targetTop, durationMs = 260) {
+  const start = scrollEl.scrollTop
+  const delta = targetTop - start
+  if (Math.abs(delta) < 1) return Promise.resolve()
+
+  const startTime = performance.now()
+  return new Promise((resolve) => {
+    const step = (now) => {
+      const t = Math.min(1, (now - startTime) / durationMs)
+      // ease-out quart: snappy start, soft landing
+      const eased = 1 - (1 - t) ** 4
+      scrollEl.scrollTop = start + delta * eased
+      if (t < 1) requestAnimationFrame(step)
+      else resolve()
+    }
+    requestAnimationFrame(step)
   })
 }
 
+/** Wait for blocks to mount and layout height to settle, then scroll to bottom. */
+async function scrollDownAfterRender(behavior = 'smooth') {
+  const expectedCount = visibleBlocks.value.length
+  if (!expectedCount) return
+
+  let lastHeight = -1
+  let stable = 0
+  let scrollEl = null
+
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await nextTick()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+
+    scrollEl = getScrollEl()
+    const block = activeBlockRef.value
+    if (!scrollEl || !block) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      continue
+    }
+
+    const slotCount = scrollEl.querySelectorAll('.reader-block-slot').length
+    if (slotCount < expectedCount) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      continue
+    }
+
+    // Keep pinned to bottom while layout settles (no animation yet).
+    scrollEl.scrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+
+    const height = scrollEl.scrollHeight
+    if (height > 0 && height === lastHeight) {
+      stable += 1
+      if (stable >= 2) break
+    } else {
+      stable = 0
+      lastHeight = height
+    }
+  }
+
+  if (!scrollEl) scrollEl = getScrollEl()
+  if (!scrollEl) return
+
+  const finalTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+  if (behavior === 'auto' || behavior === 'instant') {
+    scrollEl.scrollTop = finalTop
+  } else {
+    // Step back a bit then ease down so the motion is visible and snappy.
+    scrollEl.scrollTop = Math.max(0, finalTop - Math.min(120, finalTop * 0.12))
+    await animateScrollTo(scrollEl, finalTop, 260)
+  }
+}
+
+/** Wait until the new active block is mounted, then scroll down. */
+async function scrollAfterNewBlock(behavior = 'smooth') {
+  await scrollDownAfterRender(behavior)
+}
+
 watch(
-  () => [reader.loading, reader.pageData, reader.progress.typing_block_index],
-  ([loading, pageData]) => {
-    if (!loading && pageData && activeBlock.value && !reader.isBookComplete) {
-      scrollActiveBlockIntoView(hasScrolledInitially.value ? 'smooth' : 'instant')
+  () => [reader.loading, reader.pageData],
+  async ([loading, pageData]) => {
+    if (
+      !loading &&
+      pageData &&
+      activeBlock.value &&
+      !reader.isBookComplete &&
+      !hasScrolledInitially.value
+    ) {
       hasScrolledInitially.value = true
+      await scrollDownAfterRender('auto')
     }
   },
 )
@@ -330,27 +414,31 @@ function backToLibrary() {
         </button>
       </p>
 
-      <div class="reader-scroll">
-        <section class="card reader-blocks">
-          <div
-            v-for="block in visibleBlocks"
-            :key="block.index"
-            :ref="block.index === reader.progress.typing_block_index ? setActiveBlockRef : undefined"
-            class="reader-block-slot"
-            :class="{ 'reader-block-slot--active': block.index === reader.progress.typing_block_index }"
-          >
-            <BlockReader
-              :book-id="reader.bookId"
-              :block="block"
-              :status="reader.blockStatus(block.index)"
-              :initial-draft="block.index === reader.progress.typing_block_index ? reader.progress.draft_text : ''"
-              :is-last-block="!reader.isBookComplete && block.index === (reader.book?.block_count ?? 0) - 1"
-              @update:draft="onDraft"
-              @complete="onComplete"
-              @save="onSave"
-            />
-          </div>
-        </section>
+      <div class="reader-scroll-shell">
+        <div class="reader-scroll-fade reader-scroll-fade--top" aria-hidden="true" />
+        <div ref="readerScrollRef" class="reader-scroll">
+          <section class="card reader-blocks">
+            <div
+              v-for="block in visibleBlocks"
+              :key="block.index"
+              :ref="block.index === reader.progress.typing_block_index ? setActiveBlockRef : undefined"
+              class="reader-block-slot"
+              :class="{ 'reader-block-slot--active': block.index === reader.progress.typing_block_index }"
+            >
+              <BlockReader
+                :book-id="reader.bookId"
+                :block="block"
+                :status="reader.blockStatus(block.index)"
+                :initial-draft="block.index === reader.progress.typing_block_index ? reader.progress.draft_text : ''"
+                :is-last-block="!reader.isBookComplete && block.index === (reader.book?.block_count ?? 0) - 1"
+                @update:draft="onDraft"
+                @complete="onComplete"
+                @save="onSave"
+              />
+            </div>
+          </section>
+        </div>
+        <div class="reader-scroll-fade reader-scroll-fade--bottom" aria-hidden="true" />
       </div>
     </template>
   </main>
@@ -360,7 +448,9 @@ function backToLibrary() {
 .reader-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   padding: 1rem 0 0;
   max-width: none;
   width: 100%;
@@ -493,18 +583,82 @@ function backToLibrary() {
   font-weight: 600;
 }
 
+.reader-scroll-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: min(56rem, calc(100% - 2rem));
+  margin: 1rem auto 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.reader-scroll-fade {
+  position: absolute;
+  left: 0;
+  right: 8px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.reader-scroll-fade--top {
+  top: 0;
+  height: clamp(2.5rem, 7vh, 4rem);
+  background: linear-gradient(
+    to bottom,
+    var(--bg) 0%,
+    color-mix(in srgb, var(--bg) 72%, transparent) 45%,
+    transparent 100%
+  );
+}
+
+.reader-scroll-fade--bottom {
+  bottom: 0;
+  height: clamp(1.25rem, 4vh, 2.25rem);
+  background: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    color-mix(in srgb, var(--bg) 55%, transparent) 55%,
+    transparent 100%
+  );
+}
+
 .reader-scroll {
   flex: 1;
   min-height: 0;
+  width: 100%;
   overflow-y: auto;
-  margin-top: 1rem;
-  scroll-behavior: smooth;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 55%, var(--border)) transparent;
+}
+
+.reader-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.reader-scroll::-webkit-scrollbar-track {
+  margin-block: 0.5rem;
+  background: transparent;
+}
+
+.reader-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.reader-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--accent) 70%, var(--border));
 }
 
 .reader-blocks {
-  width: min(56rem, calc(100% - 2rem));
-  margin: 0 auto;
-  padding: clamp(4rem, 12vh, 8rem) 1.25rem clamp(2rem, 6vh, 4rem);
+  width: 100%;
+  margin: 0;
+  padding: clamp(2.75rem, 8vh, 5rem) 1rem clamp(2rem, 6vh, 4rem) 0.85rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -517,5 +671,15 @@ function backToLibrary() {
 
 .reader-block-slot:not(.reader-block-slot--active) {
   opacity: 0.8;
+}
+</style>
+
+<style>
+/* Lock document scroll so only the styled reader viewport scrolls. */
+html.reader-lock,
+html.reader-lock body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 </style>

@@ -11,6 +11,8 @@ import {
 const IDLE_SAVE_MS = 15000
 const DRAFT_SAVE_MS = 400
 const HINT_CURSOR_RADIUS = 1
+/** Visible glyph for newline mistakes (U+21B5 RETURN SYMBOL). */
+const NEWLINE_GLYPH = '\u21B5'
 
 const props = defineProps({
   bookId: { type: Number, required: true },
@@ -114,6 +116,13 @@ function hintSegmentClass(segment) {
     return 'typing-overlay__hint typing-overlay__hint--float'
   }
   return 'typing-overlay__hints-spacer'
+}
+
+/** Show a glyph for newline in typo/hint text so mistakes are visible.
+ *  When keepBreak is true, preserve the line break so overlay stays aligned with the textarea. */
+function visibleMistakeText(text, keepBreak = false) {
+  const replacement = keepBreak ? `${NEWLINE_GLYPH}\n` : NEWLINE_GLYPH
+  return text.replace(/\r\n|\n|\r/g, replacement)
 }
 
 function syncCursorFromInput(event) {
@@ -248,14 +257,14 @@ watch(
             v-for="(segment, index) in guideSegments"
             :key="`h-${index}`"
             :class="hintSegmentClass(segment)"
-          >{{ segment.text }}</span>
+          >{{ isHintNearCursor(segment) ? visibleMistakeText(segment.text) : segment.text }}</span>
         </div>
         <div ref="typedRef" class="typing-overlay__typed" aria-hidden="true">
           <span
             v-for="(segment, index) in typedSegments"
             :key="`t-${index}`"
             :class="segment.state === 'typo' ? 'typing-overlay__typo' : 'typing-overlay__correct'"
-          >{{ segment.text }}</span>
+          >{{ segment.state === 'typo' ? visibleMistakeText(segment.text, true) : segment.text }}</span>
         </div>
         <textarea
           ref="inputRef"
